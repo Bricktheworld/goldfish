@@ -1,0 +1,3 @@
+struct VulkanSwapchain {}
+
+impl VulkanSwapchain {}
