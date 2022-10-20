@@ -1,4 +1,5 @@
 use super::types::Size;
+use raw_window_handle::HasRawDisplayHandle;
 use std::{
 	cell::RefCell,
 	time::{Duration, Instant},
@@ -10,20 +11,23 @@ use winit::{
 
 pub struct Window
 {
+	name: &'static str,
 	winit_window: winit::window::Window,
 	event_loop: RefCell<Option<EventLoop<()>>>,
 }
 
 impl Window
 {
-	pub fn new(title: &str) -> Result<Self, winit::error::OsError>
+	pub fn new(name: &'static str) -> Result<Self, winit::error::OsError>
 	{
-		let window_builder = winit::window::WindowBuilder::new().with_title(title);
+		let window_builder = winit::window::WindowBuilder::new().with_title(name);
 
 		let event_loop = EventLoop::new();
 		let winit_window = window_builder.build(&event_loop)?;
+		winit_window.raw_display_handle();
 
 		Ok(Self {
+			name,
 			winit_window,
 			event_loop: RefCell::new(Some(event_loop)),
 		})
@@ -44,9 +48,19 @@ impl Window
 		}
 	}
 
-	pub fn run<F>(mut self, update_fn: F)
+	pub fn get_winit(&self) -> &winit::window::Window
+	{
+		&self.winit_window
+	}
+
+	pub fn get_name(&self) -> &'static str
+	{
+		self.name
+	}
+
+	pub fn run<F>(&self, update_fn: F)
 	where
-		F: Fn(&Self, Duration) -> () + 'static,
+		F: Fn(Duration) -> () + 'static,
 	{
 		let event_loop = self.event_loop.take();
 
@@ -68,7 +82,7 @@ impl Window
 						let dt = now - last_time;
 						last_time = now;
 
-						update_fn(&self, dt);
+						update_fn(dt);
 					}
 					_ => (),
 				}
