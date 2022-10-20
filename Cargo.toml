@@ -14,3 +14,11 @@ winit = "0.27.4"
 raw-window-handle = "0.5.0"
 ash-window = "0.11.0"
 bevy_reflect = "0.8.1"
+
+[lib]
+name = "goldfish"
+path = "src/engine/lib.rs"
+
+[[bin]]
+name = "goldfish_editor"
+path = "src/editor/editor.rs"

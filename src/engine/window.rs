@@ -1,4 +1,4 @@
-use super::types::Size;
+use crate::types::Size;
 use raw_window_handle::HasRawDisplayHandle;
 use std::{
 	cell::RefCell,
