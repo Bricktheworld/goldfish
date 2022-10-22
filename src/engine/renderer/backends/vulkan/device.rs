@@ -1,7 +1,4 @@
 use crate::window::Window;
-use raw_window_handle::{
-	HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
 
 use ash::{
 	extensions::{
@@ -10,20 +7,45 @@ use ash::{
 	},
 	vk, Entry,
 };
+use gpu_allocator::vulkan as vma;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::{Arc, Mutex, RwLock};
 
-pub struct VulkanGraphicsDevice
+pub struct VulkanDevice
 {
 	entry: Entry,
+
 	instance: ash::Instance,
-	device: ash::Device,
 	physical_device: vk::PhysicalDevice,
-	debug_utils_loader: DebugUtils,
-	debug_callback: vk::DebugUtilsMessengerEXT,
+	physical_device_properties: vk::PhysicalDeviceProperties,
+
+	device: ash::Device,
+
 	surface: vk::SurfaceKHR,
 	surface_loader: Surface,
+
+	debug_utils_loader: DebugUtils,
+	debug_callback: vk::DebugUtilsMessengerEXT,
+
+	vma: Option<vma::Allocator>,
+
+	graphics_queue: Mutex<vk::Queue>,
+	compute_queue: Mutex<vk::Queue>,
+	present_queue: Mutex<vk::Queue>,
+
+	depth_format: vk::Format,
+
+	queue_family_indices: QueueFamilyIndices,
+	swapchain_details: SwapchainDetails,
+}
+
+pub struct SwapchainDetails
+{
+	pub capabilities: vk::SurfaceCapabilitiesKHR,
+	pub surface_formats: Vec<vk::SurfaceFormatKHR>,
+	pub present_modes: Vec<vk::PresentModeKHR>,
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
@@ -67,14 +89,14 @@ unsafe extern "system" fn vulkan_debug_callback(
 	vk::FALSE
 }
 
-struct QueueFamilyIndices
+pub struct QueueFamilyIndices
 {
-	graphics_family: u32,
-	compute_family: u32,
-	present_family: u32,
+	pub graphics_family: u32,
+	pub compute_family: u32,
+	pub present_family: u32,
 }
 
-impl VulkanGraphicsDevice
+impl VulkanDevice
 {
 	pub fn new(window: &Window) -> Self
 	{
@@ -117,7 +139,8 @@ impl VulkanGraphicsDevice
 				.message_severity(
 					vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
 						| vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-						| vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+						| vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+						| vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
 				)
 				.message_type(
 					vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
@@ -136,8 +159,8 @@ impl VulkanGraphicsDevice
 
 			let surface_loader = Surface::new(&entry, &instance);
 
-			let find_queue_families = |dev: &vk::PhysicalDevice| -> Option<QueueFamilyIndices> {
-				let properties = instance.get_physical_device_queue_family_properties(*dev);
+			let find_queue_families = |dev: vk::PhysicalDevice| -> Option<QueueFamilyIndices> {
+				let properties = instance.get_physical_device_queue_family_properties(dev);
 
 				let mut graphics_family: Option<u32> = None;
 				let mut compute_family: Option<u32> = None;
@@ -158,7 +181,7 @@ impl VulkanGraphicsDevice
 					}
 
 					if surface_loader
-						.get_physical_device_surface_support(*dev, i as u32, surface)
+						.get_physical_device_surface_support(dev, i as u32, surface)
 						.unwrap_or(false)
 					{
 						present_family = Some(i as u32);
@@ -178,16 +201,34 @@ impl VulkanGraphicsDevice
 				None
 			};
 
-			let rate_device_suitability = |dev: &vk::PhysicalDevice| -> u32 {
-				match find_queue_families(dev)
+			let query_swapchain_support = |dev: vk::PhysicalDevice| -> Option<SwapchainDetails> {
+				match (
+					surface_loader.get_physical_device_surface_capabilities(dev, surface),
+					surface_loader.get_physical_device_surface_formats(dev, surface),
+					surface_loader.get_physical_device_surface_present_modes(dev, surface),
+				)
 				{
-					Some(_) =>
+					(Ok(capabilities), Ok(surface_formats), Ok(present_modes)) =>
+					{
+						Some(SwapchainDetails {
+							capabilities,
+							surface_formats,
+							present_modes,
+						})
+					}
+					_ => None,
+				}
+			};
+
+			let rate_device_suitability = |dev: vk::PhysicalDevice| -> u32 {
+				match (find_queue_families(dev), query_swapchain_support(dev))
+				{
+					(Some(_), Some(swapchain_details)) =>
 					{
 						// TODO(Brandon): Add check for device extension support.
-						// TODO(Brandon): Add swapchain support check.
-
 						let mut score = 0;
-						let properties = instance.get_physical_device_properties(*dev);
+
+						let properties = instance.get_physical_device_properties(dev);
 						score += match properties.device_type
 						{
 							vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
@@ -199,7 +240,7 @@ impl VulkanGraphicsDevice
 
 						return score;
 					}
-					None => 0,
+					_ => 0,
 				}
 			};
 
@@ -216,7 +257,7 @@ impl VulkanGraphicsDevice
 			let mut best_dev: Option<vk::PhysicalDevice> = None;
 			for dev in physical_devices
 			{
-				let score = rate_device_suitability(&dev);
+				let score = rate_device_suitability(dev);
 				if score > best_score
 				{
 					best_score = score;
@@ -225,8 +266,12 @@ impl VulkanGraphicsDevice
 			}
 
 			let physical_device = best_dev.expect("No GPUs on this machine are supported!");
+			let physical_device_properties =
+				instance.get_physical_device_properties(physical_device);
 
-			let queue_family_indices = find_queue_families(&physical_device).expect("Failed to get queue family indices from physical device chosen. This shouldn't ever happen!");
+			let swapchain_details = query_swapchain_support(physical_device).expect("Failed to get swapchain details from physical device chosen. This shouldn't ever happen!");
+
+			let queue_family_indices = find_queue_families(physical_device).expect("Failed to get queue family indices from physical device chosen. This shouldn't ever happen!");
 
 			let mut queue_indices = HashSet::with_capacity(3);
 			queue_indices.insert(queue_family_indices.graphics_family);
@@ -260,26 +305,118 @@ impl VulkanGraphicsDevice
 				.create_device(physical_device, &device_create_info, None)
 				.expect("Failed to create logical device!");
 
+			let graphics_queue =
+				Mutex::new(device.get_device_queue(queue_family_indices.graphics_family, 0));
+
+			let compute_queue =
+				Mutex::new(device.get_device_queue(queue_family_indices.compute_family, 0));
+
+			let present_queue =
+				Mutex::new(device.get_device_queue(queue_family_indices.present_family, 0));
+
+			let vma = Some(
+				vma::Allocator::new(&vma::AllocatorCreateDesc {
+					instance: instance.clone(),
+					physical_device,
+					device: device.clone(),
+					debug_settings: Default::default(),
+					buffer_device_address: true,
+				})
+				.expect("Failed to create Vulkan memory allocator!"),
+			);
+
+			let depth_formats = [
+				vk::Format::D32_SFLOAT_S8_UINT,
+				vk::Format::D32_SFLOAT,
+				vk::Format::D24_UNORM_S8_UINT,
+				vk::Format::D16_UNORM_S8_UINT,
+				vk::Format::D16_UNORM,
+			];
+
+			let mut depth_format: Option<vk::Format> = None;
+			for format in depth_formats
+			{
+				let properties =
+					instance.get_physical_device_format_properties(physical_device, format);
+
+				if properties
+					.optimal_tiling_features
+					.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+				{
+					depth_format = Some(format);
+					break;
+				}
+			}
+
+			let depth_format = depth_format.expect("No depth format found on this device!");
+
 			Self {
 				entry,
 				instance,
-				device,
-				debug_callback,
-				surface_loader,
 				physical_device,
+				physical_device_properties,
+
+				device,
+
+				surface_loader,
 				surface,
+
+				debug_callback,
 				debug_utils_loader,
+
+				vma,
+
+				graphics_queue,
+				compute_queue,
+				present_queue,
+
+				depth_format,
+
+				queue_family_indices,
+				swapchain_details,
 			}
 		}
 	}
+
+	pub fn wait_idle(&self)
+	{
+		unsafe { self.device.device_wait_idle().expect("Wait idle failed!") };
+	}
+
+	pub fn vk_instance(&self) -> &ash::Instance
+	{
+		&self.instance
+	}
+
+	pub fn vk_device(&self) -> &ash::Device
+	{
+		&self.device
+	}
+
+	pub fn vk_surface(&self) -> vk::SurfaceKHR
+	{
+		self.surface
+	}
+
+	pub fn get_swapchain_details(&self) -> &SwapchainDetails
+	{
+		&self.swapchain_details
+	}
+
+	pub fn get_queue_family_indices(&self) -> &QueueFamilyIndices
+	{
+		&self.queue_family_indices
+	}
 }
 
-impl Drop for VulkanGraphicsDevice
+impl Drop for VulkanDevice
 {
 	fn drop(&mut self)
 	{
 		unsafe {
-			self.device.device_wait_idle().expect("Wait idle failed!");
+			self.wait_idle();
+
+			std::mem::drop(self.vma.take());
 
 			self.device.destroy_device(None);
 			self.surface_loader.destroy_surface(self.surface, None);

@@ -4,6 +4,6 @@ fn main()
 {
 	let engine = GoldfishEngine::new("Goldfish Editor");
 	engine.run(move |_| {
-		println!("Editor update!");
+		// println!("Editor update!");
 	});
 }

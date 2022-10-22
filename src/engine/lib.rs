@@ -30,7 +30,7 @@ impl GoldfishEngine
 		F: Fn(Duration) + 'static,
 	{
 		self.window.run(move |dt| {
-			println!("Goldfish update {} ns", dt.as_nanos());
+			// println!("Goldfish update {} ns", dt.as_nanos());
 			editor_update(dt);
 		});
 	}

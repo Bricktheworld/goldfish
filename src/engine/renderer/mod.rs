@@ -1,4 +1,4 @@
 pub mod backends;
 
-use backends::vulkan::device::VulkanGraphicsDevice;
+use backends::vulkan::VulkanGraphicsDevice;
 pub type GraphicsDevice = VulkanGraphicsDevice;
