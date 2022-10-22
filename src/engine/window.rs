@@ -13,8 +13,10 @@ pub struct Window
 {
 	name: &'static str,
 	winit_window: winit::window::Window,
-	event_loop: RefCell<Option<EventLoop<()>>>,
+	event_loop: Option<EventLoop<()>>,
 }
+
+pub type WindowRunContext = EventLoop<()>;
 
 impl Window
 {
@@ -29,7 +31,7 @@ impl Window
 		Ok(Self {
 			name,
 			winit_window,
-			event_loop: RefCell::new(Some(event_loop)),
+			event_loop: Some(event_loop),
 		})
 	}
 
@@ -58,39 +60,39 @@ impl Window
 		self.name
 	}
 
-	pub fn run<F>(&self, update_fn: F)
-	where
-		F: Fn(Duration) -> () + 'static,
+	pub fn get_run_context(&mut self) -> WindowRunContext
 	{
-		let event_loop = self.event_loop.take();
+		self.event_loop
+			.take()
+			.expect("Cannot get call get_run_context more than once!")
+	}
 
-		if let Some(event_loop) = event_loop
-		{
-			let mut last_time = Instant::now();
-			event_loop.run(move |event, _, control_flow| {
-				*control_flow = ControlFlow::Poll;
+	pub fn run<F>(context: WindowRunContext, mut update_fn: F)
+	where
+		F: FnMut(Duration) -> () + 'static,
+	{
+		let event_loop = context;
 
-				match event
+		let mut last_time = Instant::now();
+		event_loop.run(move |event, _, control_flow| {
+			*control_flow = ControlFlow::Poll;
+
+			match event
+			{
+				Event::WindowEvent {
+					event: WindowEvent::CloseRequested,
+					..
+				} => *control_flow = ControlFlow::Exit,
+				Event::MainEventsCleared =>
 				{
-					Event::WindowEvent {
-						event: WindowEvent::CloseRequested,
-						..
-					} => *control_flow = ControlFlow::Exit,
-					Event::MainEventsCleared =>
-					{
-						let now = Instant::now();
-						let dt = now - last_time;
-						last_time = now;
+					let now = Instant::now();
+					let dt = now - last_time;
+					last_time = now;
 
-						update_fn(dt);
-					}
-					_ => (),
+					update_fn(dt);
 				}
-			});
-		}
-		else
-		{
-			panic!("Cannot call 'Window::run' more than once!");
-		}
+				_ => (),
+			}
+		});
 	}
 }

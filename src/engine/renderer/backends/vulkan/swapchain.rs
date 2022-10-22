@@ -1,13 +1,16 @@
-use super::command_pool::VulkanCommandPool;
-use super::device::VulkanDevice;
-use super::fence::VulkanFence;
-use super::semaphore::VulkanSemaphore;
+use super::{
+	command_pool::{QueueType, VulkanCommandBuffer, VulkanCommandPool},
+	device::VulkanDevice,
+	fence::VulkanFence,
+	semaphore::VulkanSemaphore,
+};
 
 use crate::types::Size;
 
+use super::SwapchainError;
 use ash::{extensions::khr::Swapchain, vk};
 use std::rc::Rc;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Weak};
 
 pub struct VulkanSwapchain
 {
@@ -20,15 +23,213 @@ pub struct VulkanSwapchain
 	swapchain: vk::SwapchainKHR,
 
 	images: Vec<SwapchainImage>,
+
+	frames: Vec<VulkanFrame>,
+	current_frame: usize,
+
+	framebuffer_was_resized: bool,
 }
 
 impl VulkanSwapchain
 {
-	pub fn new(framebuffer_size: Size, device: VulkanDevice) -> Self
-	{
-		let device = Arc::new(device);
+	const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-		let swapchain_details = device.get_swapchain_details();
+	pub fn new(framebuffer_size: Size, device: Arc<VulkanDevice>) -> Self
+	{
+		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
+			Self::init_swapchain(framebuffer_size, &device);
+		let mut frames = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT);
+
+		for _ in 0..Self::MAX_FRAMES_IN_FLIGHT
+		{
+			frames.push(VulkanFrame {
+				command_pool: VulkanCommandPool::new(Arc::downgrade(&device), QueueType::GRAPHICS),
+				completed_fence: Rc::new(VulkanFence::new(Arc::downgrade(&device), true)),
+				acquired_sem: VulkanSemaphore::new(Arc::downgrade(&device)),
+				present_sem: VulkanSemaphore::new(Arc::downgrade(&device)),
+			});
+		}
+
+		Self {
+			device,
+			image_format,
+			extent,
+			render_pass,
+			swapchain_loader,
+			swapchain,
+
+			images,
+
+			frames,
+			current_frame: 0,
+
+			framebuffer_was_resized: false,
+		}
+	}
+
+	pub fn acquire(&mut self) -> Result<AcquiredSwapchainFrame, SwapchainError>
+	{
+		assert!(
+			self.current_frame < Self::MAX_FRAMES_IN_FLIGHT,
+			"Invalid swapchain current frame!"
+		);
+
+		// Get the current frame that we are processing
+		let frame = &mut self.frames[self.current_frame];
+
+		// Wait for the frame to have fully finished rendering before acquiring.
+		frame.completed_fence.wait();
+
+		// TODO(Brandon): Clear frame resources
+
+		match unsafe {
+			self.swapchain_loader.acquire_next_image(
+				self.swapchain,
+				std::u64::MAX,
+				frame.acquired_sem.get(),
+				vk::Fence::null(),
+			)
+		}
+		{
+			Ok((image_index, false)) =>
+			{
+				assert!(
+					image_index < self.images.len() as u32,
+					"Invalid image index received!"
+				);
+
+				let image = &mut self.images[image_index as usize];
+
+				if let Some(ref fence) = image.available_fence
+				{
+					fence.wait();
+				}
+
+				image.available_fence = Some(Rc::clone(&frame.completed_fence));
+
+				Ok(AcquiredSwapchainFrame {
+					image_index,
+					frame_index: self.current_frame,
+					output_framebuffer: image.framebuffer,
+				})
+			}
+			Ok((_, true)) => Err(SwapchainError::AcquireSuboptimal),
+			Err(_) => Err(SwapchainError::AcquireSuboptimal),
+		}
+	}
+
+	pub fn submit(&mut self, image_index: u32, command_buffers: &[VulkanCommandBuffer])
+	{
+		let frame = &self.frames[self.current_frame];
+
+		let acquired_sem = &frame.acquired_sem;
+		let present_sem = &frame.present_sem;
+
+		unsafe {
+			frame.completed_fence.reset();
+
+			self.device
+				.vk_device()
+				.queue_submit(
+					*self.device.graphics_queue.lock().unwrap(),
+					&[vk::SubmitInfo::builder()
+						.wait_semaphores(&[acquired_sem.get()])
+						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+						.command_buffers(&command_buffers)
+						.signal_semaphores(&[present_sem.get()])
+						.build()],
+					frame.completed_fence.get(),
+				)
+				.unwrap();
+		}
+
+		self.current_frame = (self.current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT;
+
+		match unsafe {
+			self.swapchain_loader.queue_present(
+				*self.device.present_queue.lock().unwrap(),
+				&vk::PresentInfoKHR::builder()
+					.wait_semaphores(&[present_sem.get()])
+					.swapchains(&[self.swapchain])
+					.image_indices(&[image_index]),
+			)
+		}
+		{
+			Ok(optimal) =>
+			{
+				if self.framebuffer_was_resized || !optimal
+				{
+					self.framebuffer_was_resized = false;
+				}
+			}
+			Err(_) =>
+			{
+				self.framebuffer_was_resized = true;
+				dbg!("Failed to present swapchain images!");
+			}
+		}
+	}
+
+	pub fn get_current_frame(&self) -> usize
+	{
+		self.current_frame
+	}
+
+	pub fn get_frame(&self, index: usize) -> &VulkanFrame
+	{
+		&self.frames[index]
+	}
+
+	pub fn invalidate(&mut self, framebuffer_size: Size)
+	{
+		dbg!("Framebuffer size {}", framebuffer_size);
+		self.device.wait_idle();
+
+		self.destroy_swapchain();
+
+		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
+			Self::init_swapchain(framebuffer_size, &self.device);
+
+		self.image_format = image_format;
+		self.extent = extent;
+		self.swapchain_loader = swapchain_loader;
+		self.swapchain = swapchain;
+		self.render_pass = render_pass;
+		self.images = images;
+		dbg!(
+			"New extent is width: {}, height: {}",
+			extent.width,
+			extent.height
+		);
+	}
+
+	fn destroy_swapchain(&mut self)
+	{
+		unsafe {
+			self.images.clear();
+
+			self.device
+				.vk_device()
+				.destroy_render_pass(self.render_pass, None);
+
+			self.swapchain_loader
+				.destroy_swapchain(self.swapchain, None);
+		}
+	}
+
+	fn init_swapchain(
+		framebuffer_size: Size,
+		device: &Arc<VulkanDevice>,
+	) -> (
+		vk::Format,
+		vk::Extent2D,
+		Swapchain,
+		vk::SwapchainKHR,
+		vk::RenderPass,
+		Vec<SwapchainImage>,
+	)
+	{
+		let swapchain_details = device.query_swapchain_details();
 
 		let capabilities = &swapchain_details.capabilities;
 
@@ -49,26 +250,27 @@ impl VulkanSwapchain
 			.find(|&mode| mode == vk::PresentModeKHR::IMMEDIATE)
 			.unwrap_or(vk::PresentModeKHR::FIFO);
 
-		let pick_swap_extent = || -> vk::Extent2D {
-			if capabilities.current_extent.width != std::u32::MAX
-			{
-				return capabilities.current_extent;
-			}
-			else
-			{
-				return vk::Extent2D {
-					width: framebuffer_size.width.clamp(
-						capabilities.min_image_extent.width,
-						capabilities.max_image_extent.width,
-					),
-					height: framebuffer_size.height.clamp(
-						capabilities.min_image_extent.height,
-						capabilities.max_image_extent.height,
-					),
-				};
+		let extent = if capabilities.current_extent.width != std::u32::MAX
+		{
+			capabilities.current_extent
+		}
+		else
+		{
+			vk::Extent2D {
+				width: framebuffer_size.width.clamp(
+					capabilities.min_image_extent.width,
+					capabilities.max_image_extent.width,
+				),
+				height: framebuffer_size.height.clamp(
+					capabilities.min_image_extent.height,
+					capabilities.max_image_extent.height,
+				),
 			}
 		};
-		let extent = pick_swap_extent();
+		println!(
+			"Min extent {}x{}",
+			capabilities.min_image_extent.width, capabilities.min_image_extent.height
+		);
 
 		let mut image_count = capabilities.min_image_count + 1;
 		if capabilities.max_image_count > 0 && image_count > capabilities.max_image_count
@@ -76,7 +278,7 @@ impl VulkanSwapchain
 			image_count = capabilities.max_image_count;
 		}
 
-		let swapchain_loader = Swapchain::new(device.vk_instance(), device.vk_device());
+		let swapchain_loader = Swapchain::new(&device.vk_instance(), &device.vk_device());
 		let mut create_info = vk::SwapchainCreateInfoKHR::builder()
 			.surface(device.vk_surface())
 			.min_image_count(image_count)
@@ -211,16 +413,19 @@ impl VulkanSwapchain
 			})
 			.collect();
 
-		Self {
-			device,
+		(
 			image_format,
 			extent,
 			swapchain_loader,
 			swapchain,
 			render_pass,
-
 			images,
-		}
+		)
+	}
+
+	pub fn get_frame_mut(&mut self, index: usize) -> &mut VulkanFrame
+	{
+		&mut self.frames[index]
 	}
 }
 
@@ -228,19 +433,13 @@ impl Drop for VulkanSwapchain
 {
 	fn drop(&mut self)
 	{
-		unsafe {
-			self.images.clear();
-
-			self.device
-				.vk_device()
-				.destroy_render_pass(self.render_pass, None);
-
-			self.swapchain_loader
-				.destroy_swapchain(self.swapchain, None);
-		}
+		self.device.wait_idle();
+		self.frames.clear();
+		self.destroy_swapchain();
 	}
 }
 
+#[derive(Clone)]
 struct SwapchainImage
 {
 	image: vk::Image,
@@ -263,7 +462,6 @@ impl Drop for SwapchainImage
 
 			vk_device.destroy_framebuffer(self.framebuffer, None);
 			vk_device.destroy_image_view(self.image_view, None);
-			vk_device.destroy_image(self.image, None);
 		}
 	}
 }
@@ -271,7 +469,32 @@ impl Drop for SwapchainImage
 pub struct VulkanFrame
 {
 	command_pool: VulkanCommandPool,
-	completed_fence: VulkanFence,
+	completed_fence: Rc<VulkanFence>,
 	acquired_sem: VulkanSemaphore,
 	present_sem: VulkanSemaphore,
+}
+
+impl VulkanFrame
+{
+	pub fn recycle_command_pool(&mut self)
+	{
+		self.command_pool.recycle();
+	}
+
+	pub fn begin_command_buffer(&mut self) -> VulkanCommandBuffer
+	{
+		self.command_pool.begin_command_buffer()
+	}
+
+	pub fn end_command_buffer(&mut self, command_buffer: VulkanCommandBuffer)
+	{
+		self.command_pool.end_command_buffer(command_buffer)
+	}
+}
+
+pub struct AcquiredSwapchainFrame
+{
+	pub output_framebuffer: vk::Framebuffer,
+	pub image_index: u32,
+	pub frame_index: usize,
 }

@@ -1,5 +1,8 @@
 use crate::window::Window;
 
+use super::command_pool::VulkanCommandBuffer;
+use super::fence::VulkanFence;
+
 use ash::{
 	extensions::{
 		ext::DebugUtils,
@@ -11,17 +14,17 @@ use gpu_allocator::vulkan as vma;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 pub struct VulkanDevice
 {
 	entry: Entry,
 
-	instance: ash::Instance,
+	instance: Arc<RwLock<ash::Instance>>,
 	physical_device: vk::PhysicalDevice,
 	physical_device_properties: vk::PhysicalDeviceProperties,
 
-	device: ash::Device,
+	device: Arc<RwLock<ash::Device>>,
 
 	surface: vk::SurfaceKHR,
 	surface_loader: Surface,
@@ -29,16 +32,15 @@ pub struct VulkanDevice
 	debug_utils_loader: DebugUtils,
 	debug_callback: vk::DebugUtilsMessengerEXT,
 
-	vma: Option<vma::Allocator>,
+	vma: Arc<RwLock<Option<vma::Allocator>>>,
 
-	graphics_queue: Mutex<vk::Queue>,
-	compute_queue: Mutex<vk::Queue>,
-	present_queue: Mutex<vk::Queue>,
+	pub graphics_queue: Arc<Mutex<vk::Queue>>,
+	pub compute_queue: Arc<Mutex<vk::Queue>>,
+	pub present_queue: Arc<Mutex<vk::Queue>>,
 
 	depth_format: vk::Format,
 
 	queue_family_indices: QueueFamilyIndices,
-	swapchain_details: SwapchainDetails,
 }
 
 pub struct SwapchainDetails
@@ -201,27 +203,11 @@ impl VulkanDevice
 				None
 			};
 
-			let query_swapchain_support = |dev: vk::PhysicalDevice| -> Option<SwapchainDetails> {
-				match (
-					surface_loader.get_physical_device_surface_capabilities(dev, surface),
-					surface_loader.get_physical_device_surface_formats(dev, surface),
-					surface_loader.get_physical_device_surface_present_modes(dev, surface),
-				)
-				{
-					(Ok(capabilities), Ok(surface_formats), Ok(present_modes)) =>
-					{
-						Some(SwapchainDetails {
-							capabilities,
-							surface_formats,
-							present_modes,
-						})
-					}
-					_ => None,
-				}
-			};
-
 			let rate_device_suitability = |dev: vk::PhysicalDevice| -> u32 {
-				match (find_queue_families(dev), query_swapchain_support(dev))
+				match (
+					find_queue_families(dev),
+					Self::query_swapchain_support_physical_device(&surface_loader, surface, dev),
+				)
 				{
 					(Some(_), Some(swapchain_details)) =>
 					{
@@ -269,7 +255,7 @@ impl VulkanDevice
 			let physical_device_properties =
 				instance.get_physical_device_properties(physical_device);
 
-			let swapchain_details = query_swapchain_support(physical_device).expect("Failed to get swapchain details from physical device chosen. This shouldn't ever happen!");
+			let swapchain_details = Self::query_swapchain_support_physical_device(&surface_loader, surface, physical_device).expect("Failed to get swapchain details from physical device chosen. This shouldn't ever happen!");
 
 			let queue_family_indices = find_queue_families(physical_device).expect("Failed to get queue family indices from physical device chosen. This shouldn't ever happen!");
 
@@ -305,16 +291,19 @@ impl VulkanDevice
 				.create_device(physical_device, &device_create_info, None)
 				.expect("Failed to create logical device!");
 
-			let graphics_queue =
-				Mutex::new(device.get_device_queue(queue_family_indices.graphics_family, 0));
+			let graphics_queue = Arc::new(Mutex::new(
+				device.get_device_queue(queue_family_indices.graphics_family, 0),
+			));
 
-			let compute_queue =
-				Mutex::new(device.get_device_queue(queue_family_indices.compute_family, 0));
+			let compute_queue = Arc::new(Mutex::new(
+				device.get_device_queue(queue_family_indices.compute_family, 0),
+			));
 
-			let present_queue =
-				Mutex::new(device.get_device_queue(queue_family_indices.present_family, 0));
+			let present_queue = Arc::new(Mutex::new(
+				device.get_device_queue(queue_family_indices.present_family, 0),
+			));
 
-			let vma = Some(
+			let vma = Arc::new(RwLock::new(Some(
 				vma::Allocator::new(&vma::AllocatorCreateDesc {
 					instance: instance.clone(),
 					physical_device,
@@ -323,7 +312,7 @@ impl VulkanDevice
 					buffer_device_address: true,
 				})
 				.expect("Failed to create Vulkan memory allocator!"),
-			);
+			)));
 
 			let depth_formats = [
 				vk::Format::D32_SFLOAT_S8_UINT,
@@ -352,11 +341,11 @@ impl VulkanDevice
 
 			Self {
 				entry,
-				instance,
+				instance: Arc::new(RwLock::new(instance)),
 				physical_device,
 				physical_device_properties,
 
-				device,
+				device: Arc::new(RwLock::new(device)),
 
 				surface_loader,
 				surface,
@@ -373,34 +362,99 @@ impl VulkanDevice
 				depth_format,
 
 				queue_family_indices,
-				swapchain_details,
 			}
 		}
 	}
 
 	pub fn wait_idle(&self)
 	{
-		unsafe { self.device.device_wait_idle().expect("Wait idle failed!") };
+		unsafe {
+			self.vk_device()
+				.device_wait_idle()
+				.expect("Wait idle failed!")
+		};
 	}
 
-	pub fn vk_instance(&self) -> &ash::Instance
+	pub fn graphics_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence)
 	{
-		&self.instance
+		fence.reset();
+		unsafe {
+			self.vk_device()
+				.queue_submit(
+					*self.graphics_queue.lock().unwrap(),
+					&[vk::SubmitInfo::builder()
+						.command_buffers(&[command_buffer])
+						.build()],
+					fence.get(),
+				)
+				.expect("Failed to submit to graphics queue!");
+		}
 	}
 
-	pub fn vk_device(&self) -> &ash::Device
+	pub fn compute_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence)
 	{
-		&self.device
+		fence.reset();
+		unsafe {
+			self.vk_device()
+				.queue_submit(
+					*self.compute_queue.lock().unwrap(),
+					&[vk::SubmitInfo::builder()
+						.command_buffers(&[command_buffer])
+						.build()],
+					fence.get(),
+				)
+				.expect("Failed to submit to compute queue!");
+		}
+	}
+
+	pub fn vk_instance(&self) -> RwLockReadGuard<ash::Instance>
+	{
+		self.instance.read().unwrap()
+	}
+
+	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
+	{
+		self.device.read().unwrap()
 	}
 
 	pub fn vk_surface(&self) -> vk::SurfaceKHR
 	{
 		self.surface
 	}
-
-	pub fn get_swapchain_details(&self) -> &SwapchainDetails
+	fn query_swapchain_support_physical_device(
+		surface_loader: &Surface,
+		surface: vk::SurfaceKHR,
+		dev: vk::PhysicalDevice,
+	) -> Option<SwapchainDetails>
 	{
-		&self.swapchain_details
+		unsafe {
+			match (
+				surface_loader.get_physical_device_surface_capabilities(dev, surface),
+				surface_loader.get_physical_device_surface_formats(dev, surface),
+				surface_loader.get_physical_device_surface_present_modes(dev, surface),
+			)
+			{
+				(Ok(capabilities), Ok(surface_formats), Ok(present_modes)) =>
+				{
+					Some(SwapchainDetails {
+						capabilities,
+						surface_formats,
+						present_modes,
+					})
+				}
+				_ => None,
+			}
+		}
+	}
+
+	pub fn query_swapchain_details(&self) -> SwapchainDetails
+	{
+		Self::query_swapchain_support_physical_device(
+			&self.surface_loader,
+			self.surface,
+			self.physical_device,
+		)
+		.expect("Failed to get physical device swapchain support details!")
 	}
 
 	pub fn get_queue_family_indices(&self) -> &QueueFamilyIndices
@@ -416,13 +470,13 @@ impl Drop for VulkanDevice
 		unsafe {
 			self.wait_idle();
 
-			std::mem::drop(self.vma.take());
+			std::mem::drop(self.vma.write().unwrap().take());
 
-			self.device.destroy_device(None);
+			self.vk_device().destroy_device(None);
 			self.surface_loader.destroy_surface(self.surface, None);
 			self.debug_utils_loader
 				.destroy_debug_utils_messenger(self.debug_callback, None);
-			self.instance.destroy_instance(None);
+			self.vk_instance().destroy_instance(None);
 		}
 	}
 }

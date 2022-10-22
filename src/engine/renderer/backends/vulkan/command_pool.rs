@@ -1,4 +1,3 @@
-use super::command_buffer::VulkanCommandBuffer;
 use super::device::VulkanDevice;
 use ash::vk;
 use std::sync::Weak;
@@ -8,6 +7,8 @@ pub enum QueueType
 	GRAPHICS,
 	COMPUTE,
 }
+
+pub type VulkanCommandBuffer = vk::CommandBuffer;
 
 pub struct VulkanCommandPool
 {
@@ -44,7 +45,7 @@ impl VulkanCommandPool
 		}
 	}
 
-	pub fn begin_command_buffer<'a>(&'a mut self) -> &'a VulkanCommandBuffer
+	pub fn begin_command_buffer(&mut self) -> VulkanCommandBuffer
 	{
 		assert!(
 			self.index <= self.command_buffers.len(),
@@ -56,7 +57,7 @@ impl VulkanCommandPool
 			self.expand();
 		}
 
-		let command_buffer = &self.command_buffers[self.index];
+		let command_buffer = self.command_buffers[self.index];
 
 		unsafe {
 			self.device
@@ -64,7 +65,7 @@ impl VulkanCommandPool
 				.unwrap()
 				.vk_device()
 				.begin_command_buffer(
-					command_buffer.get(),
+					command_buffer,
 					&vk::CommandBufferBeginInfo::builder()
 						.flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
 				)
@@ -72,6 +73,36 @@ impl VulkanCommandPool
 		}
 
 		return command_buffer;
+	}
+
+	pub fn end_command_buffer(&mut self, command_buffer: VulkanCommandBuffer)
+	{
+		unsafe {
+			self.device
+				.upgrade()
+				.unwrap()
+				.vk_device()
+				.end_command_buffer(command_buffer)
+				.expect("Failed to end command buffer!");
+		}
+
+		self.index += 1;
+	}
+
+	pub fn recycle(&mut self)
+	{
+		unsafe {
+			self.device
+				.upgrade()
+				.unwrap()
+				.vk_device()
+				.reset_command_pool(
+					self.command_pool,
+					vk::CommandPoolResetFlags::RELEASE_RESOURCES,
+				)
+				.expect("Failed to recycle command pool!");
+		}
+		self.index = 0;
 	}
 
 	fn expand(&mut self)
@@ -91,8 +122,7 @@ impl VulkanCommandPool
 		.first()
 		.unwrap();
 
-		self.command_buffers
-			.push(VulkanCommandBuffer::new(new_cmd_buffer));
+		self.command_buffers.push(new_cmd_buffer);
 	}
 }
 

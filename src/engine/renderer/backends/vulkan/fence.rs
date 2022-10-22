@@ -35,9 +35,9 @@ impl VulkanFence
 		}
 	}
 
-	pub fn get(&self) -> &vk::Fence
+	pub fn get(&self) -> vk::Fence
 	{
-		&self.fence
+		self.fence
 	}
 
 	pub fn wait(&self)

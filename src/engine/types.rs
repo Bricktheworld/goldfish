@@ -1,3 +1,4 @@
+#[derive(Debug, Copy, Clone)]
 pub struct Size
 {
 	pub width: u32,
