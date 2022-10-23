@@ -16,6 +16,7 @@ ash-window = "0.11.0"
 gpu-allocator = "0.20.0"
 bevy_reflect = "0.8.1"
 custom_error = "1.9.2"
+glam = "0.21.3"
 
 [lib]
 name = "goldfish"

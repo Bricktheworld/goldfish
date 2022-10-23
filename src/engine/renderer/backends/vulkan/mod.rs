@@ -9,9 +9,10 @@ use command_pool::VulkanCommandBuffer;
 use device::VulkanDevice;
 use swapchain::VulkanSwapchain;
 
+use crate::types::Color;
 use ash::vk;
 use custom_error::custom_error;
-use std::sync::Arc;
+use std::sync::{Arc, RwLockReadGuard};
 
 custom_error! {pub SwapchainError
 	SubmitSuboptimal = "Swapchain is suboptimal and needs to be recreated",
@@ -29,13 +30,14 @@ impl VulkanGraphicsDevice
 	pub fn new(window: &Window) -> (Self, VulkanGraphicsContext)
 	{
 		let device = Arc::new(VulkanDevice::new(window));
-		let swapchain = VulkanSwapchain::new(window.get_size(), Arc::clone(&device));
+		let swapchain = VulkanSwapchain::new(window.get_size(), &device);
 
 		(
 			Self { device },
 			VulkanGraphicsContext {
 				swapchain,
 				current_frame_info: None,
+				output_framebuffer_is_bound: true,
 			},
 		)
 	}
@@ -45,6 +47,7 @@ pub struct VulkanGraphicsContext
 {
 	swapchain: VulkanSwapchain,
 	current_frame_info: Option<CurrentFrameInfo>,
+	output_framebuffer_is_bound: bool,
 }
 
 struct CurrentFrameInfo
@@ -106,5 +109,84 @@ impl VulkanGraphicsContext
 		{
 			panic!("Did not call begin_frame first!");
 		}
+	}
+
+	pub fn bind_output_framebuffer(&mut self, color: Color)
+	{
+		let cmd = self.get_command_buffer();
+
+		unsafe {
+			self.vk_device().cmd_set_viewport(
+				cmd,
+				0,
+				&[vk::Viewport::builder()
+					.x(0.0)
+					.y(self.swapchain.extent().height as f32)
+					.width(self.swapchain.extent().width as f32)
+					.height(-(self.swapchain.extent().height as f32))
+					.min_depth(0.0)
+					.max_depth(1.0)
+					.build()],
+			);
+
+			self.vk_device().cmd_set_scissor(
+				cmd,
+				0,
+				&[vk::Rect2D::builder()
+					.offset(vk::Offset2D { x: 0, y: 0 })
+					.extent(self.swapchain.extent())
+					.build()],
+			);
+
+			self.vk_device().cmd_begin_render_pass(
+				cmd,
+				&vk::RenderPassBeginInfo::builder()
+					.render_pass(self.swapchain.render_pass())
+					.framebuffer(self.get_output_framebuffer())
+					.render_area(vk::Rect2D {
+						offset: vk::Offset2D { x: 0, y: 0 },
+						extent: self.swapchain.extent(),
+					})
+					.clear_values(&[vk::ClearValue {
+						color: vk::ClearColorValue {
+							float32: [color.r, color.g, color.b, color.a],
+						},
+					}]),
+				vk::SubpassContents::INLINE,
+			);
+		}
+
+		self.output_framebuffer_is_bound = true;
+	}
+
+	pub fn unbind_output_framebuffer(&mut self)
+	{
+		assert!(self.output_framebuffer_is_bound, "Unbinding output framebuffer not allowed without first binding with `bind_output_framebuffer`");
+		unsafe {
+			self.vk_device()
+				.cmd_end_render_pass(self.get_command_buffer());
+		}
+		self.output_framebuffer_is_bound = false;
+	}
+
+	fn get_command_buffer(&self) -> VulkanCommandBuffer
+	{
+		self.current_frame_info
+			.as_ref()
+			.expect("begin_frame was not called!")
+			.command_buffer
+	}
+
+	fn get_output_framebuffer(&self) -> vk::Framebuffer
+	{
+		self.current_frame_info
+			.as_ref()
+			.expect("begin_frame was not called!")
+			.output_framebuffer
+	}
+
+	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
+	{
+		self.swapchain.vk_device()
 	}
 }

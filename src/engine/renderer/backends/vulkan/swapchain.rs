@@ -10,11 +10,11 @@ use crate::types::Size;
 use super::SwapchainError;
 use ash::{extensions::khr::Swapchain, vk};
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, RwLockReadGuard, Weak};
 
 pub struct VulkanSwapchain
 {
-	device: Arc<VulkanDevice>,
+	pub(crate) device: Arc<VulkanDevice>,
 
 	image_format: vk::Format,
 	extent: vk::Extent2D,
@@ -34,8 +34,10 @@ impl VulkanSwapchain
 {
 	const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-	pub fn new(framebuffer_size: Size, device: Arc<VulkanDevice>) -> Self
+	pub fn new(framebuffer_size: Size, device: &Arc<VulkanDevice>) -> Self
 	{
+		let device = Arc::clone(device);
+
 		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
 			Self::init_swapchain(framebuffer_size, &device);
 		let mut frames = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT);
@@ -182,7 +184,6 @@ impl VulkanSwapchain
 
 	pub fn invalidate(&mut self, framebuffer_size: Size)
 	{
-		dbg!("Framebuffer size {}", framebuffer_size);
 		self.device.wait_idle();
 
 		self.destroy_swapchain();
@@ -196,11 +197,6 @@ impl VulkanSwapchain
 		self.swapchain = swapchain;
 		self.render_pass = render_pass;
 		self.images = images;
-		dbg!(
-			"New extent is width: {}, height: {}",
-			extent.width,
-			extent.height
-		);
 	}
 
 	fn destroy_swapchain(&mut self)
@@ -267,10 +263,6 @@ impl VulkanSwapchain
 				),
 			}
 		};
-		println!(
-			"Min extent {}x{}",
-			capabilities.min_image_extent.width, capabilities.min_image_extent.height
-		);
 
 		let mut image_count = capabilities.min_image_count + 1;
 		if capabilities.max_image_count > 0 && image_count > capabilities.max_image_count
@@ -426,6 +418,21 @@ impl VulkanSwapchain
 	pub fn get_frame_mut(&mut self, index: usize) -> &mut VulkanFrame
 	{
 		&mut self.frames[index]
+	}
+
+	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
+	{
+		self.device.vk_device()
+	}
+
+	pub fn extent(&self) -> vk::Extent2D
+	{
+		self.extent
+	}
+
+	pub fn render_pass(&self) -> vk::RenderPass
+	{
+		self.render_pass
 	}
 }
 

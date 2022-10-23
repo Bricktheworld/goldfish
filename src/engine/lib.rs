@@ -2,6 +2,7 @@ mod renderer;
 mod types;
 mod window;
 
+use crate::types::Color;
 use renderer::{GraphicsContext, GraphicsDevice};
 use std::time::Duration;
 use window::Window;
@@ -34,7 +35,17 @@ impl GoldfishEngine
 		Window::run(self.window.get_run_context(), move |dt| {
 			match self.graphics_context.begin_frame(&self.window)
 			{
-				Ok(_) => self.graphics_context.end_frame(),
+				Ok(_) =>
+				{
+					self.graphics_context.bind_output_framebuffer(Color {
+						r: 0.0,
+						g: 0.0,
+						b: 0.0,
+						a: 1.0,
+					});
+					self.graphics_context.unbind_output_framebuffer();
+					self.graphics_context.end_frame();
+				}
 				Err(_) => (),
 			}
 

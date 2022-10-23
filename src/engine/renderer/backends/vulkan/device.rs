@@ -32,7 +32,7 @@ pub struct VulkanDevice
 	debug_utils_loader: DebugUtils,
 	debug_callback: vk::DebugUtilsMessengerEXT,
 
-	vma: Arc<RwLock<Option<vma::Allocator>>>,
+	vma: Arc<Mutex<Option<vma::Allocator>>>,
 
 	pub graphics_queue: Arc<Mutex<vk::Queue>>,
 	pub compute_queue: Arc<Mutex<vk::Queue>>,
@@ -125,7 +125,7 @@ impl VulkanDevice
 				.application_version(0)
 				.engine_name(app_name)
 				.engine_version(0)
-				.api_version(vk::make_api_version(0, 1, 0, 0));
+				.api_version(vk::make_api_version(0, 1, 1, 0));
 
 			let create_info = vk::InstanceCreateInfo::builder()
 				.application_info(&app_info)
@@ -301,7 +301,7 @@ impl VulkanDevice
 				device.get_device_queue(queue_family_indices.present_family, 0),
 			));
 
-			let vma = Arc::new(RwLock::new(Some(
+			let vma = Arc::new(Mutex::new(Some(
 				vma::Allocator::new(&vma::AllocatorCreateDesc {
 					instance: instance.clone(),
 					physical_device,
@@ -468,7 +468,7 @@ impl Drop for VulkanDevice
 		unsafe {
 			self.wait_idle();
 
-			std::mem::drop(self.vma.write().unwrap().take());
+			std::mem::drop(self.vma.lock().unwrap().take());
 
 			self.vk_device().destroy_device(None);
 			self.surface_loader.destroy_surface(self.surface, None);
