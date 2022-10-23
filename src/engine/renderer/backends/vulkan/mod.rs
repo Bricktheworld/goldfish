@@ -81,10 +81,8 @@ impl VulkanGraphicsContext
 
 				Ok(())
 			}
-			// TODO(Brandon): Add invalidation of swapchain here.
 			Err(err) =>
 			{
-				dbg!("Recreating swapchain!");
 				self.swapchain.invalidate(window.get_size());
 				Err(err)
 			}

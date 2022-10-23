@@ -255,8 +255,6 @@ impl VulkanDevice
 			let physical_device_properties =
 				instance.get_physical_device_properties(physical_device);
 
-			let swapchain_details = Self::query_swapchain_support_physical_device(&surface_loader, surface, physical_device).expect("Failed to get swapchain details from physical device chosen. This shouldn't ever happen!");
-
 			let queue_family_indices = find_queue_families(physical_device).expect("Failed to get queue family indices from physical device chosen. This shouldn't ever happen!");
 
 			let mut queue_indices = HashSet::with_capacity(3);
