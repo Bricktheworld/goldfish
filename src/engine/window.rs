@@ -14,6 +14,7 @@ pub struct Window
 	name: &'static str,
 	winit_window: winit::window::Window,
 	event_loop: Option<EventLoop<()>>,
+	was_resized: bool,
 }
 
 pub type WindowRunContext = EventLoop<()>;
@@ -32,6 +33,7 @@ impl Window
 			name,
 			winit_window,
 			event_loop: Some(event_loop),
+			was_resized: false,
 		})
 	}
 
@@ -69,11 +71,12 @@ impl Window
 
 	pub fn run<F>(context: WindowRunContext, mut update_fn: F)
 	where
-		F: FnMut(Duration) -> () + 'static,
+		F: FnMut(Duration, Option<Size>) -> () + 'static,
 	{
 		let event_loop = context;
 
 		let mut last_time = Instant::now();
+		let mut new_size: Option<Size> = None;
 		event_loop.run(move |event, _, control_flow| {
 			*control_flow = ControlFlow::Poll;
 
@@ -83,13 +86,24 @@ impl Window
 					event: WindowEvent::CloseRequested,
 					..
 				} => *control_flow = ControlFlow::Exit,
+				Event::WindowEvent {
+					event: WindowEvent::Resized(size),
+					..
+				} =>
+				{
+					new_size = Some(Size {
+						width: size.width,
+						height: size.height,
+					})
+				}
 				Event::MainEventsCleared =>
 				{
 					let now = Instant::now();
 					let dt = now - last_time;
 					last_time = now;
 
-					update_fn(dt);
+					update_fn(dt, new_size);
+					new_size = None;
 				}
 				_ => (),
 			}

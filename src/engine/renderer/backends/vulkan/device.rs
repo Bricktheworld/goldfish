@@ -100,7 +100,7 @@ pub struct QueueFamilyIndices
 
 impl VulkanDevice
 {
-	pub fn new(window: &Window) -> Self
+	pub fn new(window: &Window) -> Arc<Self>
 	{
 		unsafe {
 			let entry = Entry::linked();
@@ -337,7 +337,7 @@ impl VulkanDevice
 
 			let depth_format = depth_format.expect("No depth format found on this device!");
 
-			Self {
+			Arc::new(Self {
 				entry,
 				instance: Arc::new(RwLock::new(instance)),
 				physical_device,
@@ -360,7 +360,7 @@ impl VulkanDevice
 				depth_format,
 
 				queue_family_indices,
-			}
+			})
 		}
 	}
 

@@ -9,7 +9,7 @@ use command_pool::VulkanCommandBuffer;
 use device::VulkanDevice;
 use swapchain::VulkanSwapchain;
 
-use crate::types::Color;
+use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
 use std::sync::{Arc, RwLockReadGuard};
@@ -29,7 +29,7 @@ impl VulkanGraphicsDevice
 {
 	pub fn new(window: &Window) -> (Self, VulkanGraphicsContext)
 	{
-		let device = Arc::new(VulkanDevice::new(window));
+		let device = VulkanDevice::new(window);
 		let swapchain = VulkanSwapchain::new(window.get_size(), &device);
 
 		(
@@ -92,7 +92,7 @@ impl VulkanGraphicsContext
 		}
 	}
 
-	pub fn end_frame(&mut self)
+	pub fn end_frame(&mut self, window: &Window)
 	{
 		if let Some(current_frame_info) = self.current_frame_info.take()
 		{
@@ -100,10 +100,13 @@ impl VulkanGraphicsContext
 
 			frame.end_command_buffer(current_frame_info.command_buffer);
 
-			self.swapchain.submit(
+			if let Err(_) = self.swapchain.submit(
 				current_frame_info.image_index,
 				&[current_frame_info.command_buffer],
-			);
+			)
+			{
+				self.swapchain.invalidate(window.get_size());
+			}
 		}
 		else
 		{
@@ -188,5 +191,10 @@ impl VulkanGraphicsContext
 	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
 	{
 		self.swapchain.vk_device()
+	}
+
+	pub fn on_resize(&mut self, framebuffer_size: Size)
+	{
+		self.swapchain.invalidate(framebuffer_size);
 	}
 }

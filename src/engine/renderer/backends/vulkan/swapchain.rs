@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLockReadGuard, Weak};
 
 pub struct VulkanSwapchain
 {
-	pub(crate) device: Arc<VulkanDevice>,
+	pub device: Arc<VulkanDevice>,
 
 	image_format: vk::Format,
 	extent: vk::Extent2D,
@@ -26,8 +26,6 @@ pub struct VulkanSwapchain
 
 	frames: Vec<VulkanFrame>,
 	current_frame: usize,
-
-	framebuffer_was_resized: bool,
 }
 
 impl VulkanSwapchain
@@ -64,8 +62,6 @@ impl VulkanSwapchain
 
 			frames,
 			current_frame: 0,
-
-			framebuffer_was_resized: false,
 		}
 	}
 
@@ -120,7 +116,11 @@ impl VulkanSwapchain
 		}
 	}
 
-	pub fn submit(&mut self, image_index: u32, command_buffers: &[VulkanCommandBuffer])
+	pub fn submit(
+		&mut self,
+		image_index: u32,
+		command_buffers: &[VulkanCommandBuffer],
+	) -> Result<(), SwapchainError>
 	{
 		let frame = &self.frames[self.current_frame];
 
@@ -130,10 +130,11 @@ impl VulkanSwapchain
 		unsafe {
 			frame.completed_fence.reset();
 
+			let graphics_queue = self.device.graphics_queue.lock().unwrap();
 			self.device
 				.vk_device()
 				.queue_submit(
-					*self.device.graphics_queue.lock().unwrap(),
+					*graphics_queue,
 					&[vk::SubmitInfo::builder()
 						.wait_semaphores(&[acquired_sem.get()])
 						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
@@ -147,9 +148,10 @@ impl VulkanSwapchain
 
 		self.current_frame = (self.current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT;
 
+		let present_queue = self.device.present_queue.lock().unwrap();
 		match unsafe {
 			self.swapchain_loader.queue_present(
-				*self.device.present_queue.lock().unwrap(),
+				*present_queue,
 				&vk::PresentInfoKHR::builder()
 					.wait_semaphores(&[present_sem.get()])
 					.swapchains(&[self.swapchain])
@@ -157,17 +159,24 @@ impl VulkanSwapchain
 			)
 		}
 		{
-			Ok(optimal) =>
+			Ok(suboptimal) =>
 			{
-				if self.framebuffer_was_resized || !optimal
+				if suboptimal
 				{
-					self.framebuffer_was_resized = false;
+					return Err(SwapchainError::SubmitSuboptimal);
 				}
+				else
+				{
+					return Ok(());
+				}
+			}
+			Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) =>
+			{
+				Err(SwapchainError::SubmitSuboptimal)
 			}
 			Err(_) =>
 			{
-				self.framebuffer_was_resized = true;
-				dbg!("Failed to present swapchain images!");
+				panic!("Failed to present swapchain images!");
 			}
 		}
 	}
