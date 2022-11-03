@@ -1,8 +1,10 @@
 mod command_pool;
 mod device;
 mod fence;
+mod framebuffer;
 mod semaphore;
 mod swapchain;
+mod texture;
 
 use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
@@ -41,6 +43,11 @@ impl VulkanGraphicsDevice
 			},
 		)
 	}
+
+	pub fn wait_idle(&self)
+	{
+		self.device.wait_idle();
+	}
 }
 
 pub struct VulkanGraphicsContext
@@ -71,7 +78,7 @@ impl VulkanGraphicsContext
 		{
 			Ok(res) =>
 			{
-				let frame = self.swapchain.get_frame_mut(res.frame_index);
+				let mut frame = self.swapchain.get_frame_mut(res.frame_index);
 				frame.recycle_command_pool();
 
 				let command_buffer = frame.begin_command_buffer();
@@ -96,9 +103,11 @@ impl VulkanGraphicsContext
 	{
 		if let Some(current_frame_info) = self.current_frame_info.take()
 		{
-			let frame = self.swapchain.get_frame_mut(current_frame_info.frame_index);
+			{
+				let mut frame = self.swapchain.get_frame_mut(current_frame_info.frame_index);
 
-			frame.end_command_buffer(current_frame_info.command_buffer);
+				frame.end_command_buffer(current_frame_info.command_buffer);
+			}
 
 			if let Err(_) = self.swapchain.submit(
 				current_frame_info.image_index,

@@ -52,7 +52,7 @@ impl VulkanFence
 		}
 	}
 
-	pub fn wait_multiple(fences: &[VulkanFence], wait_all: bool)
+	pub fn wait_multiple(fences: &[&VulkanFence], wait_all: bool)
 	{
 		unsafe {
 			if fences.is_empty()

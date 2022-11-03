@@ -14,8 +14,9 @@ use gpu_allocator::vulkan as vma;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
+#[derive(Clone)]
 pub struct VulkanDevice
 {
 	entry: Entry,
@@ -91,6 +92,7 @@ unsafe extern "system" fn vulkan_debug_callback(
 	vk::FALSE
 }
 
+#[derive(Clone)]
 pub struct QueueFamilyIndices
 {
 	pub graphics_family: u32,
@@ -419,6 +421,12 @@ impl VulkanDevice
 	{
 		self.surface
 	}
+
+	pub fn vma(&self) -> MutexGuard<Option<vma::Allocator>>
+	{
+		return self.vma.lock().unwrap();
+	}
+
 	fn query_swapchain_support_physical_device(
 		surface_loader: &Surface,
 		surface: vk::SurfaceKHR,

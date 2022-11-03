@@ -17,6 +17,8 @@ gpu-allocator = "0.20.0"
 bevy_reflect = "0.8.1"
 custom_error = "1.9.2"
 glam = "0.21.3"
+bitflags = "2.0.0-rc.1"
+rand = "0.8.5"
 
 [lib]
 name = "goldfish"

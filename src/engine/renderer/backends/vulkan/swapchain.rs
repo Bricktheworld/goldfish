@@ -9,8 +9,12 @@ use crate::types::Size;
 
 use super::SwapchainError;
 use ash::{extensions::khr::Swapchain, vk};
+use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::{Arc, RwLockReadGuard, Weak};
+use std::sync::{
+	atomic::{AtomicU32, Ordering},
+	Arc, RwLock, RwLockReadGuard, Weak,
+};
 
 pub struct VulkanSwapchain
 {
@@ -25,7 +29,82 @@ pub struct VulkanSwapchain
 	images: Vec<SwapchainImage>,
 
 	frames: Vec<VulkanFrame>,
-	current_frame: usize,
+	frame_resource_manager: VulkanFrameResourceManager,
+	current_frame: Arc<AtomicU32>,
+}
+
+#[derive(Clone)]
+pub struct VulkanFrameResourceManager
+{
+	in_use_resources: Vec<Arc<RwLock<HashSet<u64>>>>,
+	fences: Vec<Rc<VulkanFence>>,
+	current_frame: Arc<AtomicU32>,
+}
+
+impl VulkanFrameResourceManager
+{
+	pub fn new(current_frame: &Arc<AtomicU32>, fences: Vec<Rc<VulkanFence>>) -> Self
+	{
+		Self {
+			in_use_resources: vec![Arc::new(RwLock::new(HashSet::new())); fences.len()],
+			current_frame: Arc::clone(current_frame),
+			fences,
+		}
+	}
+
+	pub fn use_resource<T>(&mut self, resource: T)
+	where
+		T: vk::Handle,
+	{
+		self.in_use_resources[self.current_frame.load(Ordering::SeqCst) as usize]
+			.write()
+			.unwrap()
+			.insert(resource.as_raw());
+	}
+
+	pub fn is_using_resource<T>(&self, resource: T) -> bool
+	where
+		T: vk::Handle,
+	{
+		self.in_use_resources[self.current_frame.load(Ordering::SeqCst) as usize]
+			.read()
+			.unwrap()
+			.contains(&resource.as_raw())
+	}
+
+	pub fn clear_resources(&mut self)
+	{
+		self.in_use_resources[self.current_frame.load(Ordering::SeqCst) as usize]
+			.write()
+			.unwrap()
+			.clear();
+	}
+
+	pub fn wait_resource_not_in_use<T>(&self, resource: T)
+	where
+		T: vk::Handle,
+	{
+		let resource = &resource.as_raw();
+
+		let fences: Vec<&VulkanFence> = self
+			.in_use_resources
+			.iter()
+			.enumerate()
+			.flat_map(|(i, resources)| {
+				let resources = resources.read().unwrap();
+				if resources.contains(&resource)
+				{
+					Some(&self.fences[i] as &VulkanFence)
+				}
+				else
+				{
+					None
+				}
+			})
+			.collect();
+
+		VulkanFence::wait_multiple(&fences, true);
+	}
 }
 
 impl VulkanSwapchain
@@ -50,6 +129,15 @@ impl VulkanSwapchain
 			});
 		}
 
+		let current_frame = Arc::new(AtomicU32::new(0));
+		let frame_resource_manager = VulkanFrameResourceManager::new(
+			&current_frame,
+			frames
+				.iter()
+				.map(|frame| Rc::clone(&frame.completed_fence))
+				.collect(),
+		);
+
 		Self {
 			device,
 			image_format,
@@ -61,24 +149,27 @@ impl VulkanSwapchain
 			images,
 
 			frames,
-			current_frame: 0,
+			frame_resource_manager,
+			current_frame,
 		}
 	}
 
 	pub fn acquire(&mut self) -> Result<AcquiredSwapchainFrame, SwapchainError>
 	{
 		assert!(
-			self.current_frame < Self::MAX_FRAMES_IN_FLIGHT,
+			self.current_frame.load(Ordering::SeqCst) < Self::MAX_FRAMES_IN_FLIGHT as u32,
 			"Invalid swapchain current frame!"
 		);
 
 		// Get the current frame that we are processing
-		let frame = &mut self.frames[self.current_frame];
+		let current_frame = self.current_frame.load(Ordering::SeqCst) as usize;
+		let frame = &mut self.frames[current_frame];
 
 		// Wait for the frame to have fully finished rendering before acquiring.
 		frame.completed_fence.wait();
 
-		// TODO(Brandon): Clear frame resources
+		// Clear frame resources
+		self.frame_resource_manager.clear_resources();
 
 		match unsafe {
 			self.swapchain_loader.acquire_next_image(
@@ -107,7 +198,7 @@ impl VulkanSwapchain
 
 				Ok(AcquiredSwapchainFrame {
 					image_index,
-					frame_index: self.current_frame,
+					frame_index: current_frame,
 					output_framebuffer: image.framebuffer,
 				})
 			}
@@ -122,7 +213,8 @@ impl VulkanSwapchain
 		command_buffers: &[VulkanCommandBuffer],
 	) -> Result<(), SwapchainError>
 	{
-		let frame = &self.frames[self.current_frame];
+		let current_frame = self.current_frame.load(Ordering::SeqCst) as usize;
+		let frame = &self.frames[current_frame];
 
 		let acquired_sem = &frame.acquired_sem;
 		let present_sem = &frame.present_sem;
@@ -146,7 +238,10 @@ impl VulkanSwapchain
 				.unwrap();
 		}
 
-		self.current_frame = (self.current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT;
+		self.current_frame.store(
+			((current_frame + 1) % Self::MAX_FRAMES_IN_FLIGHT) as u32,
+			Ordering::SeqCst,
+		);
 
 		let present_queue = self.device.present_queue.lock().unwrap();
 		match unsafe {
@@ -179,16 +274,6 @@ impl VulkanSwapchain
 				panic!("Failed to present swapchain images!");
 			}
 		}
-	}
-
-	pub fn get_current_frame(&self) -> usize
-	{
-		self.current_frame
-	}
-
-	pub fn get_frame(&self, index: usize) -> &VulkanFrame
-	{
-		&self.frames[index]
 	}
 
 	pub fn invalidate(&mut self, framebuffer_size: Size)
@@ -422,6 +507,11 @@ impl VulkanSwapchain
 			render_pass,
 			images,
 		)
+	}
+
+	pub fn get_frame(&self, index: usize) -> &VulkanFrame
+	{
+		&self.frames[index]
 	}
 
 	pub fn get_frame_mut(&mut self, index: usize) -> &mut VulkanFrame

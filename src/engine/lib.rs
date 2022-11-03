@@ -3,6 +3,7 @@ mod types;
 mod window;
 
 use crate::types::Color;
+use rand::prelude::*;
 use renderer::{GraphicsContext, GraphicsDevice};
 use std::time::Duration;
 use window::Window;
@@ -32,6 +33,7 @@ impl GoldfishEngine
 	where
 		F: FnMut(&mut Self, Duration) + 'static,
 	{
+		let mut rng = rand::thread_rng();
 		Window::run(self.window.get_run_context(), move |dt, new_size| {
 			if let Some(size) = new_size
 			{
@@ -46,9 +48,9 @@ impl GoldfishEngine
 			if let Ok(_) = self.graphics_context.begin_frame(&self.window)
 			{
 				self.graphics_context.bind_output_framebuffer(Color {
-					r: 0.0,
-					g: 0.0,
-					b: 0.0,
+					r: rng.gen(),
+					g: rng.gen(),
+					b: rng.gen(),
 					a: 1.0,
 				});
 				self.graphics_context.unbind_output_framebuffer();
