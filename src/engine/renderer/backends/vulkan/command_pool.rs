@@ -1,4 +1,4 @@
-use super::{device::VulkanDevice, VulkanDeviceChild};
+use super::device::{VulkanDevice, VulkanDeviceChild};
 use ash::vk;
 
 pub enum QueueType
@@ -28,7 +28,7 @@ impl VulkanCommandPool
 		};
 		let command_pool = unsafe {
 			device
-				.vk_device()
+				.raw
 				.create_command_pool(
 					&vk::CommandPoolCreateInfo::builder().queue_family_index(queue_index),
 					None,
@@ -60,7 +60,7 @@ impl VulkanCommandPool
 
 		unsafe {
 			device
-				.vk_device()
+				.raw
 				.begin_command_buffer(
 					command_buffer,
 					&vk::CommandBufferBeginInfo::builder()
@@ -76,7 +76,7 @@ impl VulkanCommandPool
 	{
 		unsafe {
 			device
-				.vk_device()
+				.raw
 				.end_command_buffer(command_buffer)
 				.expect("Failed to end command buffer!");
 		}
@@ -88,7 +88,7 @@ impl VulkanCommandPool
 	{
 		unsafe {
 			device
-				.vk_device()
+				.raw
 				.reset_command_pool(
 					self.command_pool,
 					vk::CommandPoolResetFlags::RELEASE_RESOURCES,
@@ -102,7 +102,7 @@ impl VulkanCommandPool
 	{
 		let new_cmd_buffer = *unsafe {
 			device
-				.vk_device()
+				.raw
 				.allocate_command_buffers(
 					&vk::CommandBufferAllocateInfo::builder()
 						.command_pool(self.command_pool)
@@ -122,11 +122,7 @@ impl VulkanDeviceChild for VulkanCommandPool
 {
 	fn destroy(mut self, device: &VulkanDevice)
 	{
-		unsafe {
-			device
-				.vk_device()
-				.destroy_command_pool(self.command_pool, None)
-		}
+		unsafe { device.raw.destroy_command_pool(self.command_pool, None) }
 		self.destroyed = true;
 	}
 }

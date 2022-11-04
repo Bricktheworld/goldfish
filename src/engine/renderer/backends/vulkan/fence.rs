@@ -1,4 +1,4 @@
-use super::{device::VulkanDevice, VulkanDeviceChild};
+use super::device::{VulkanDevice, VulkanDeviceChild};
 use ash::vk;
 
 pub struct VulkanFence
@@ -24,7 +24,7 @@ impl VulkanFence
 			);
 
 			let fence = device
-				.vk_device()
+				.raw
 				.create_fence(&create_info, None)
 				.expect("Failed to create VulkanFence");
 
@@ -44,7 +44,7 @@ impl VulkanFence
 	{
 		unsafe {
 			device
-				.vk_device()
+				.raw
 				.wait_for_fences(&[self.fence], true, std::u64::MAX)
 				.expect("Failed to wait for VulkanFence!");
 		}
@@ -61,7 +61,7 @@ impl VulkanFence
 			let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.fence).collect();
 
 			device
-				.vk_device()
+				.raw
 				.wait_for_fences(&vk_fences, wait_all, std::u64::MAX)
 				.expect("Failed to wait for VulkanFences!");
 		}
@@ -71,7 +71,7 @@ impl VulkanFence
 	{
 		unsafe {
 			device
-				.vk_device()
+				.raw
 				.reset_fences(&[self.fence])
 				.expect("Failed to reset VulkanFence");
 		}
@@ -83,7 +83,7 @@ impl VulkanDeviceChild for VulkanFence
 	fn destroy(mut self, device: &VulkanDevice)
 	{
 		unsafe {
-			device.vk_device().destroy_fence(self.fence, None);
+			device.raw.destroy_fence(self.fence, None);
 		}
 		self.destroyed = true;
 	}

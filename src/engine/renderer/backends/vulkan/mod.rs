@@ -21,11 +21,6 @@ custom_error! {pub SwapchainError
 	AcquireSuboptimal = "Swapchain is suboptimal and needs to be recreated"
 }
 
-pub trait VulkanDeviceChild
-{
-	fn destroy(self, device: &VulkanDevice) -> ();
-}
-
 #[derive(Clone)]
 pub struct VulkanGraphicsDevice
 {
@@ -121,7 +116,7 @@ impl VulkanGraphicsContext
 		let cmd = self.get_command_buffer();
 
 		unsafe {
-			self.vk_device().cmd_set_viewport(
+			self.raw_device().cmd_set_viewport(
 				cmd,
 				0,
 				&[vk::Viewport::builder()
@@ -134,7 +129,7 @@ impl VulkanGraphicsContext
 					.build()],
 			);
 
-			self.vk_device().cmd_set_scissor(
+			self.raw_device().cmd_set_scissor(
 				cmd,
 				0,
 				&[vk::Rect2D::builder()
@@ -143,7 +138,7 @@ impl VulkanGraphicsContext
 					.build()],
 			);
 
-			self.vk_device().cmd_begin_render_pass(
+			self.raw_device().cmd_begin_render_pass(
 				cmd,
 				&vk::RenderPassBeginInfo::builder()
 					.render_pass(self.swapchain.render_pass())
@@ -168,7 +163,7 @@ impl VulkanGraphicsContext
 	{
 		assert!(self.output_framebuffer_is_bound, "Unbinding output framebuffer not allowed without first binding with `bind_output_framebuffer`");
 		unsafe {
-			self.vk_device()
+			self.raw_device()
 				.cmd_end_render_pass(self.get_command_buffer());
 		}
 		self.output_framebuffer_is_bound = false;
@@ -190,9 +185,9 @@ impl VulkanGraphicsContext
 			.output_framebuffer
 	}
 
-	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
+	pub fn raw_device(&self) -> &ash::Device
 	{
-		self.swapchain.vk_device()
+		self.swapchain.raw_device()
 	}
 
 	pub fn on_resize(&mut self, framebuffer_size: Size)

@@ -1,9 +1,9 @@
 use super::{
 	command_pool::{QueueType, VulkanCommandBuffer, VulkanCommandPool},
-	device::VulkanDevice,
+	device::{VulkanDevice, VulkanDeviceChild},
 	fence::VulkanFence,
 	semaphore::VulkanSemaphore,
-	SwapchainError, VulkanDeviceChild,
+	SwapchainError,
 };
 
 use crate::types::Size;
@@ -236,7 +236,7 @@ impl VulkanSwapchain
 
 			let graphics_queue = self.device.graphics_queue.lock().unwrap();
 			self.device
-				.vk_device()
+				.raw
 				.queue_submit(
 					*graphics_queue,
 					&[vk::SubmitInfo::builder()
@@ -313,9 +313,7 @@ impl VulkanSwapchain
 				image.destroy(&self.device);
 			}
 
-			self.device
-				.vk_device()
-				.destroy_render_pass(self.render_pass, None);
+			self.device.raw.destroy_render_pass(self.render_pass, None);
 
 			self.swapchain_loader
 				.destroy_swapchain(self.swapchain, None);
@@ -379,9 +377,9 @@ impl VulkanSwapchain
 			image_count = capabilities.max_image_count;
 		}
 
-		let swapchain_loader = Swapchain::new(&device.vk_instance(), &device.vk_device());
+		let swapchain_loader = Swapchain::new(&device.instance, &device.raw);
 		let mut create_info = vk::SwapchainCreateInfoKHR::builder()
-			.surface(device.vk_surface())
+			.surface(device.surface)
 			.min_image_count(image_count)
 			.image_format(surface_format.format)
 			.image_color_space(surface_format.color_space)
@@ -421,7 +419,7 @@ impl VulkanSwapchain
 
 		let render_pass = unsafe {
 			device
-				.vk_device()
+				.raw
 				.create_render_pass(
 					&vk::RenderPassCreateInfo::builder()
 						.attachments(&[vk::AttachmentDescription::builder()
@@ -464,7 +462,7 @@ impl VulkanSwapchain
 			.into_iter()
 			.map(|image| unsafe {
 				let image_view = device
-					.vk_device()
+					.raw
 					.create_image_view(
 						&vk::ImageViewCreateInfo::builder()
 							.image(image)
@@ -492,7 +490,7 @@ impl VulkanSwapchain
 					.expect("Failed to create image view!");
 
 				let framebuffer = device
-					.vk_device()
+					.raw
 					.create_framebuffer(
 						&vk::FramebufferCreateInfo::builder()
 							.render_pass(render_pass)
@@ -533,9 +531,9 @@ impl VulkanSwapchain
 		&mut self.frames[index]
 	}
 
-	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
+	pub fn raw_device(&self) -> &ash::Device
 	{
-		self.device.vk_device()
+		&self.device.raw
 	}
 
 	pub fn extent(&self) -> vk::Extent2D
@@ -595,7 +593,7 @@ impl VulkanDeviceChild for SwapchainImage
 	fn destroy(self, device: &VulkanDevice)
 	{
 		unsafe {
-			let vk_device = device.vk_device();
+			let vk_device = &device.raw;
 
 			vk_device.destroy_framebuffer(self.framebuffer, None);
 			vk_device.destroy_image_view(self.image_view, None);

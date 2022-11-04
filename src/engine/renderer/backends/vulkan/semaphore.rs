@@ -1,4 +1,4 @@
-use super::{device::VulkanDevice, VulkanDeviceChild};
+use super::device::{VulkanDevice, VulkanDeviceChild};
 use ash::vk;
 
 pub struct VulkanSemaphore
@@ -13,7 +13,7 @@ impl VulkanSemaphore
 	{
 		unsafe {
 			let semaphore = device
-				.vk_device()
+				.raw
 				.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
 				.expect("Failed to create VulkanSemaphore");
 			Self {
@@ -34,7 +34,7 @@ impl VulkanDeviceChild for VulkanSemaphore
 	fn destroy(mut self, device: &VulkanDevice)
 	{
 		unsafe {
-			device.vk_device().destroy_semaphore(self.semaphore, None);
+			device.raw.destroy_semaphore(self.semaphore, None);
 		}
 		self.destroyed = true;
 	}

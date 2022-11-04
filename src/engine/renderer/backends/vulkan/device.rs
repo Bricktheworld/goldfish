@@ -14,34 +14,39 @@ use gpu_allocator::vulkan as vma;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 #[derive(Clone)]
 pub struct VulkanDevice
 {
 	entry: Entry,
 
-	instance: Arc<RwLock<ash::Instance>>,
-	physical_device: vk::PhysicalDevice,
-	physical_device_properties: vk::PhysicalDeviceProperties,
+	pub instance: Arc<ash::Instance>,
+	pub physical_device: vk::PhysicalDevice,
+	pub physical_device_properties: vk::PhysicalDeviceProperties,
 
-	device: Arc<RwLock<ash::Device>>,
+	pub raw: Arc<ash::Device>,
 
-	surface: vk::SurfaceKHR,
-	surface_loader: Surface,
+	pub surface: vk::SurfaceKHR,
+	pub surface_loader: Surface,
 
 	debug_utils_loader: DebugUtils,
 	debug_callback: vk::DebugUtilsMessengerEXT,
 
-	vma: Arc<Mutex<Option<vma::Allocator>>>,
+	pub vma: Arc<Mutex<Option<vma::Allocator>>>,
 
 	pub graphics_queue: Arc<Mutex<vk::Queue>>,
 	pub compute_queue: Arc<Mutex<vk::Queue>>,
 	pub present_queue: Arc<Mutex<vk::Queue>>,
 
-	depth_format: vk::Format,
+	pub depth_format: vk::Format,
 
 	queue_family_indices: QueueFamilyIndices,
+}
+
+pub trait VulkanDeviceChild
+{
+	fn destroy(self, device: &VulkanDevice) -> ();
 }
 
 pub struct SwapchainDetails
@@ -341,11 +346,11 @@ impl VulkanDevice
 
 			Self {
 				entry,
-				instance: Arc::new(RwLock::new(instance)),
+				instance: Arc::new(instance),
 				physical_device,
 				physical_device_properties,
 
-				device: Arc::new(RwLock::new(device)),
+				raw: Arc::new(device),
 
 				surface_loader,
 				surface,
@@ -368,18 +373,14 @@ impl VulkanDevice
 
 	pub fn wait_idle(&self)
 	{
-		unsafe {
-			self.vk_device()
-				.device_wait_idle()
-				.expect("Wait idle failed!")
-		};
+		unsafe { self.raw.device_wait_idle().expect("Wait idle failed!") };
 	}
 
 	pub fn graphics_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence)
 	{
 		fence.reset(self);
 		unsafe {
-			self.vk_device()
+			self.raw
 				.queue_submit(
 					*self.graphics_queue.lock().unwrap(),
 					&[vk::SubmitInfo::builder()
@@ -395,7 +396,7 @@ impl VulkanDevice
 	{
 		fence.reset(self);
 		unsafe {
-			self.vk_device()
+			self.raw
 				.queue_submit(
 					*self.compute_queue.lock().unwrap(),
 					&[vk::SubmitInfo::builder()
@@ -405,26 +406,6 @@ impl VulkanDevice
 				)
 				.expect("Failed to submit to compute queue!");
 		}
-	}
-
-	pub fn vk_instance(&self) -> RwLockReadGuard<ash::Instance>
-	{
-		self.instance.read().unwrap()
-	}
-
-	pub fn vk_device(&self) -> RwLockReadGuard<ash::Device>
-	{
-		self.device.read().unwrap()
-	}
-
-	pub fn vk_surface(&self) -> vk::SurfaceKHR
-	{
-		self.surface
-	}
-
-	pub fn vma(&self) -> MutexGuard<Option<vma::Allocator>>
-	{
-		return self.vma.lock().unwrap();
 	}
 
 	fn query_swapchain_support_physical_device(
@@ -475,11 +456,16 @@ impl VulkanDevice
 
 			std::mem::drop(self.vma.lock().unwrap().take());
 
-			self.vk_device().destroy_device(None);
+			self.raw.destroy_device(None);
 			self.surface_loader.destroy_surface(self.surface, None);
 			self.debug_utils_loader
 				.destroy_debug_utils_messenger(self.debug_callback, None);
-			self.vk_instance().destroy_instance(None);
+			self.instance.destroy_instance(None);
 		}
+	}
+
+	pub fn depth_format(&self) -> vk::Format
+	{
+		self.depth_format
 	}
 }
