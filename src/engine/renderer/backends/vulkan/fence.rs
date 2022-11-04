@@ -1,16 +1,15 @@
-use super::device::VulkanDevice;
+use super::{device::VulkanDevice, VulkanDeviceChild};
 use ash::vk;
-use std::sync::Weak;
 
 pub struct VulkanFence
 {
-	device: Weak<VulkanDevice>,
 	fence: vk::Fence,
+	destroyed: bool,
 }
 
 impl VulkanFence
 {
-	pub fn new(device: Weak<VulkanDevice>, signaled: bool) -> Self
+	pub fn new(device: &VulkanDevice, signaled: bool) -> Self
 	{
 		unsafe {
 			let create_info = vk::FenceCreateInfo::builder().flags(
@@ -25,13 +24,14 @@ impl VulkanFence
 			);
 
 			let fence = device
-				.upgrade()
-				.unwrap()
 				.vk_device()
 				.create_fence(&create_info, None)
 				.expect("Failed to create VulkanFence");
 
-			Self { device, fence }
+			Self {
+				fence,
+				destroyed: false,
+			}
 		}
 	}
 
@@ -40,19 +40,17 @@ impl VulkanFence
 		self.fence
 	}
 
-	pub fn wait(&self)
+	pub fn wait(&self, device: &VulkanDevice)
 	{
 		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
+			device
 				.vk_device()
 				.wait_for_fences(&[self.fence], true, std::u64::MAX)
 				.expect("Failed to wait for VulkanFence!");
 		}
 	}
 
-	pub fn wait_multiple(fences: &[&VulkanFence], wait_all: bool)
+	pub fn wait_multiple(device: &VulkanDevice, fences: &[&VulkanFence], wait_all: bool)
 	{
 		unsafe {
 			if fences.is_empty()
@@ -62,22 +60,17 @@ impl VulkanFence
 
 			let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.fence).collect();
 
-			let device = &fences.first().unwrap().device;
 			device
-				.upgrade()
-				.unwrap()
 				.vk_device()
 				.wait_for_fences(&vk_fences, wait_all, std::u64::MAX)
 				.expect("Failed to wait for VulkanFences!");
 		}
 	}
 
-	pub fn reset(&self)
+	pub fn reset(&self, device: &VulkanDevice)
 	{
 		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
+			device
 				.vk_device()
 				.reset_fences(&[self.fence])
 				.expect("Failed to reset VulkanFence");
@@ -85,16 +78,24 @@ impl VulkanFence
 	}
 }
 
+impl VulkanDeviceChild for VulkanFence
+{
+	fn destroy(mut self, device: &VulkanDevice)
+	{
+		unsafe {
+			device.vk_device().destroy_fence(self.fence, None);
+		}
+		self.destroyed = true;
+	}
+}
+
 impl Drop for VulkanFence
 {
 	fn drop(&mut self)
 	{
-		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
-				.vk_device()
-				.destroy_fence(self.fence, None);
-		}
+		assert!(
+			self.destroyed,
+			"destroy(&VulkanDevice) was not called before VulkanFence was dropped!"
+		);
 	}
 }

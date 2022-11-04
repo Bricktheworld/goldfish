@@ -62,3 +62,12 @@ impl GoldfishEngine
 		});
 	}
 }
+
+impl Drop for GoldfishEngine
+{
+	fn drop(&mut self)
+	{
+		self.graphics_context.destroy();
+		self.graphics_device.destroy();
+	}
+}

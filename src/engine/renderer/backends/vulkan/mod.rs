@@ -9,22 +9,27 @@ mod texture;
 use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
 use device::VulkanDevice;
-use swapchain::VulkanSwapchain;
+use swapchain::{FrameInfo, VulkanSwapchain};
 
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
-use std::sync::{Arc, RwLockReadGuard};
+use std::sync::RwLockReadGuard;
 
 custom_error! {pub SwapchainError
 	SubmitSuboptimal = "Swapchain is suboptimal and needs to be recreated",
 	AcquireSuboptimal = "Swapchain is suboptimal and needs to be recreated"
 }
 
+pub trait VulkanDeviceChild
+{
+	fn destroy(self, device: &VulkanDevice) -> ();
+}
+
 #[derive(Clone)]
 pub struct VulkanGraphicsDevice
 {
-	device: Arc<VulkanDevice>,
+	device: VulkanDevice,
 }
 
 impl VulkanGraphicsDevice
@@ -32,7 +37,7 @@ impl VulkanGraphicsDevice
 	pub fn new(window: &Window) -> (Self, VulkanGraphicsContext)
 	{
 		let device = VulkanDevice::new(window);
-		let swapchain = VulkanSwapchain::new(window.get_size(), &device);
+		let swapchain = VulkanSwapchain::new(window.get_size(), device.clone());
 
 		(
 			Self { device },
@@ -48,21 +53,18 @@ impl VulkanGraphicsDevice
 	{
 		self.device.wait_idle();
 	}
+
+	pub fn destroy(&mut self)
+	{
+		self.device.destroy();
+	}
 }
 
 pub struct VulkanGraphicsContext
 {
 	swapchain: VulkanSwapchain,
-	current_frame_info: Option<CurrentFrameInfo>,
+	current_frame_info: Option<FrameInfo>,
 	output_framebuffer_is_bound: bool,
-}
-
-struct CurrentFrameInfo
-{
-	image_index: u32,
-	frame_index: usize,
-	command_buffer: VulkanCommandBuffer,
-	output_framebuffer: vk::Framebuffer,
 }
 
 impl VulkanGraphicsContext
@@ -78,16 +80,7 @@ impl VulkanGraphicsContext
 		{
 			Ok(res) =>
 			{
-				let mut frame = self.swapchain.get_frame_mut(res.frame_index);
-				frame.recycle_command_pool();
-
-				let command_buffer = frame.begin_command_buffer();
-				self.current_frame_info = Some(CurrentFrameInfo {
-					image_index: res.image_index,
-					frame_index: res.frame_index,
-					command_buffer,
-					output_framebuffer: res.output_framebuffer,
-				});
+				self.current_frame_info = Some(res);
 
 				Ok(())
 			}
@@ -103,15 +96,15 @@ impl VulkanGraphicsContext
 	{
 		if let Some(current_frame_info) = self.current_frame_info.take()
 		{
-			{
-				let mut frame = self.swapchain.get_frame_mut(current_frame_info.frame_index);
+			// {
+			// 	let frame = self.swapchain.get_frame_mut(current_frame_info.frame_index);
 
-				frame.end_command_buffer(current_frame_info.command_buffer);
-			}
+			// 	frame.end_command_buffer(&self.swapchain.device, current_frame_info.command_buffer);
+			// }
 
 			if let Err(_) = self.swapchain.submit(
 				current_frame_info.image_index,
-				&[current_frame_info.command_buffer],
+				current_frame_info.command_buffer,
 			)
 			{
 				self.swapchain.invalidate(window.get_size());
@@ -205,5 +198,10 @@ impl VulkanGraphicsContext
 	pub fn on_resize(&mut self, framebuffer_size: Size)
 	{
 		self.swapchain.invalidate(framebuffer_size);
+	}
+
+	pub fn destroy(&mut self)
+	{
+		self.swapchain.destroy();
 	}
 }

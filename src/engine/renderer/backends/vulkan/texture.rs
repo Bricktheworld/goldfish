@@ -2,7 +2,6 @@ use super::VulkanDevice;
 use crate::renderer::{TextureFormat, TextureUsage};
 use ash::vk;
 use gpu_allocator::vulkan as vma;
-use std::sync::{Arc, Weak};
 
 pub struct VulkanTexture
 {
@@ -17,8 +16,6 @@ pub struct VulkanTexture
 	allocation: vma::Allocation,
 	format: TextureFormat,
 	usage: TextureUsage,
-
-	device: Weak<VulkanDevice>,
 }
 
 impl VulkanTexture
@@ -63,16 +60,15 @@ impl VulkanTexture
 	// }
 }
 
-impl Drop for VulkanTexture
-{
-	fn drop(&mut self)
-	{
-		let guard = self.device.upgrade().unwrap();
-		let vk_device = guard.vk_device();
-		unsafe {
-			vk_device.destroy_image(self.image, None);
-			vk_device.destroy_image_view(self.image_view, None);
-			vk_device.destroy_sampler(self.sampler, None);
-		}
-	}
-}
+// impl Drop for VulkanTexture
+// {
+// 	fn drop(&mut self)
+// 	{
+// 		let vk_device = guard.vk_device();
+// 		unsafe {
+// 			vk_device.destroy_image(self.image, None);
+// 			vk_device.destroy_image_view(self.image_view, None);
+// 			vk_device.destroy_sampler(self.sampler, None);
+// 		}
+// 	}
+// }

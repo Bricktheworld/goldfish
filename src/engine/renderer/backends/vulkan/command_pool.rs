@@ -1,6 +1,5 @@
-use super::device::VulkanDevice;
+use super::{device::VulkanDevice, VulkanDeviceChild};
 use ash::vk;
-use std::sync::Weak;
 
 pub enum QueueType
 {
@@ -12,24 +11,24 @@ pub type VulkanCommandBuffer = vk::CommandBuffer;
 
 pub struct VulkanCommandPool
 {
-	device: Weak<VulkanDevice>,
 	command_pool: vk::CommandPool,
 	command_buffers: Vec<VulkanCommandBuffer>,
 	index: usize,
+	destroyed: bool,
 }
 
 impl VulkanCommandPool
 {
-	pub fn new(device: Weak<VulkanDevice>, queue_type: QueueType) -> Self
+	pub fn new(device: &VulkanDevice, queue_type: QueueType) -> Self
 	{
-		let dev = device.upgrade().unwrap();
 		let queue_index = match queue_type
 		{
-			QueueType::GRAPHICS => dev.get_queue_family_indices().graphics_family,
-			QueueType::COMPUTE => dev.get_queue_family_indices().compute_family,
+			QueueType::GRAPHICS => device.get_queue_family_indices().graphics_family,
+			QueueType::COMPUTE => device.get_queue_family_indices().compute_family,
 		};
 		let command_pool = unsafe {
-			dev.vk_device()
+			device
+				.vk_device()
 				.create_command_pool(
 					&vk::CommandPoolCreateInfo::builder().queue_family_index(queue_index),
 					None,
@@ -38,14 +37,14 @@ impl VulkanCommandPool
 		};
 
 		Self {
-			device,
 			command_pool,
 			command_buffers: vec![],
 			index: 0,
+			destroyed: false,
 		}
 	}
 
-	pub fn begin_command_buffer(&mut self) -> VulkanCommandBuffer
+	pub fn begin_command_buffer(&mut self, device: &VulkanDevice) -> VulkanCommandBuffer
 	{
 		assert!(
 			self.index <= self.command_buffers.len(),
@@ -54,15 +53,13 @@ impl VulkanCommandPool
 
 		if self.index == self.command_buffers.len()
 		{
-			self.expand();
+			self.expand(device);
 		}
 
 		let command_buffer = self.command_buffers[self.index];
 
 		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
+			device
 				.vk_device()
 				.begin_command_buffer(
 					command_buffer,
@@ -75,12 +72,10 @@ impl VulkanCommandPool
 		return command_buffer;
 	}
 
-	pub fn end_command_buffer(&mut self, command_buffer: VulkanCommandBuffer)
+	pub fn end_command_buffer(&mut self, device: &VulkanDevice, command_buffer: VulkanCommandBuffer)
 	{
 		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
+			device
 				.vk_device()
 				.end_command_buffer(command_buffer)
 				.expect("Failed to end command buffer!");
@@ -89,12 +84,10 @@ impl VulkanCommandPool
 		self.index += 1;
 	}
 
-	pub fn recycle(&mut self)
+	pub fn recycle(&mut self, device: &VulkanDevice)
 	{
 		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
+			device
 				.vk_device()
 				.reset_command_pool(
 					self.command_pool,
@@ -105,9 +98,8 @@ impl VulkanCommandPool
 		self.index = 0;
 	}
 
-	fn expand(&mut self)
+	fn expand(&mut self, device: &VulkanDevice)
 	{
-		let device = self.device.upgrade().unwrap();
 		let new_cmd_buffer = *unsafe {
 			device
 				.vk_device()
@@ -126,16 +118,26 @@ impl VulkanCommandPool
 	}
 }
 
+impl VulkanDeviceChild for VulkanCommandPool
+{
+	fn destroy(mut self, device: &VulkanDevice)
+	{
+		unsafe {
+			device
+				.vk_device()
+				.destroy_command_pool(self.command_pool, None)
+		}
+		self.destroyed = true;
+	}
+}
+
 impl Drop for VulkanCommandPool
 {
 	fn drop(&mut self)
 	{
-		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
-				.vk_device()
-				.destroy_command_pool(self.command_pool, None)
-		}
+		assert!(
+			self.destroyed,
+			"destroy(&VulkanDevice) was not called before VulkanCommandPool was dropped!"
+		);
 	}
 }

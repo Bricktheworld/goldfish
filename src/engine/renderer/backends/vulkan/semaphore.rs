@@ -1,25 +1,25 @@
-use super::device::VulkanDevice;
+use super::{device::VulkanDevice, VulkanDeviceChild};
 use ash::vk;
-use std::sync::Weak;
 
 pub struct VulkanSemaphore
 {
-	device: Weak<VulkanDevice>,
 	semaphore: vk::Semaphore,
+	destroyed: bool,
 }
 
 impl VulkanSemaphore
 {
-	pub fn new(device: Weak<VulkanDevice>) -> Self
+	pub fn new(device: &VulkanDevice) -> Self
 	{
 		unsafe {
 			let semaphore = device
-				.upgrade()
-				.unwrap()
 				.vk_device()
 				.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
 				.expect("Failed to create VulkanSemaphore");
-			Self { device, semaphore }
+			Self {
+				semaphore,
+				destroyed: false,
+			}
 		}
 	}
 
@@ -29,16 +29,24 @@ impl VulkanSemaphore
 	}
 }
 
+impl VulkanDeviceChild for VulkanSemaphore
+{
+	fn destroy(mut self, device: &VulkanDevice)
+	{
+		unsafe {
+			device.vk_device().destroy_semaphore(self.semaphore, None);
+		}
+		self.destroyed = true;
+	}
+}
+
 impl Drop for VulkanSemaphore
 {
 	fn drop(&mut self)
 	{
-		unsafe {
-			self.device
-				.upgrade()
-				.unwrap()
-				.vk_device()
-				.destroy_semaphore(self.semaphore, None);
-		}
+		assert!(
+			self.destroyed,
+			"destroy(&VulkanDevice) was not called before VulkanSemaphore was dropped!"
+		);
 	}
 }

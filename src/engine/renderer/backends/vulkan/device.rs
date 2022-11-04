@@ -102,7 +102,7 @@ pub struct QueueFamilyIndices
 
 impl VulkanDevice
 {
-	pub fn new(window: &Window) -> Arc<Self>
+	pub fn new(window: &Window) -> Self
 	{
 		unsafe {
 			let entry = Entry::linked();
@@ -339,7 +339,7 @@ impl VulkanDevice
 
 			let depth_format = depth_format.expect("No depth format found on this device!");
 
-			Arc::new(Self {
+			Self {
 				entry,
 				instance: Arc::new(RwLock::new(instance)),
 				physical_device,
@@ -362,7 +362,7 @@ impl VulkanDevice
 				depth_format,
 
 				queue_family_indices,
-			})
+			}
 		}
 	}
 
@@ -377,7 +377,7 @@ impl VulkanDevice
 
 	pub fn graphics_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence)
 	{
-		fence.reset();
+		fence.reset(self);
 		unsafe {
 			self.vk_device()
 				.queue_submit(
@@ -393,7 +393,7 @@ impl VulkanDevice
 
 	pub fn compute_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence)
 	{
-		fence.reset();
+		fence.reset(self);
 		unsafe {
 			self.vk_device()
 				.queue_submit(
@@ -467,11 +467,8 @@ impl VulkanDevice
 	{
 		&self.queue_family_indices
 	}
-}
 
-impl Drop for VulkanDevice
-{
-	fn drop(&mut self)
+	pub fn destroy(&mut self)
 	{
 		unsafe {
 			self.wait_idle();

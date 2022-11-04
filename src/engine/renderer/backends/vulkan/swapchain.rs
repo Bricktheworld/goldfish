@@ -3,22 +3,22 @@ use super::{
 	device::VulkanDevice,
 	fence::VulkanFence,
 	semaphore::VulkanSemaphore,
+	SwapchainError, VulkanDeviceChild,
 };
 
 use crate::types::Size;
 
-use super::SwapchainError;
 use ash::{extensions::khr::Swapchain, vk};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::{
 	atomic::{AtomicU32, Ordering},
-	Arc, RwLock, RwLockReadGuard, Weak,
+	Arc, RwLock, RwLockReadGuard,
 };
 
 pub struct VulkanSwapchain
 {
-	pub device: Arc<VulkanDevice>,
+	pub device: VulkanDevice,
 
 	image_format: vk::Format,
 	extent: vk::Extent2D,
@@ -31,6 +31,7 @@ pub struct VulkanSwapchain
 	frames: Vec<VulkanFrame>,
 	frame_resource_manager: VulkanFrameResourceManager,
 	current_frame: Arc<AtomicU32>,
+	destroyed: bool,
 }
 
 #[derive(Clone)]
@@ -80,7 +81,7 @@ impl VulkanFrameResourceManager
 			.clear();
 	}
 
-	pub fn wait_resource_not_in_use<T>(&self, resource: T)
+	pub fn wait_resource_not_in_use<T>(&self, device: &VulkanDevice, resource: T)
 	where
 		T: vk::Handle,
 	{
@@ -103,7 +104,7 @@ impl VulkanFrameResourceManager
 			})
 			.collect();
 
-		VulkanFence::wait_multiple(&fences, true);
+		VulkanFence::wait_multiple(device, &fences, true);
 	}
 }
 
@@ -111,10 +112,8 @@ impl VulkanSwapchain
 {
 	const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-	pub fn new(framebuffer_size: Size, device: &Arc<VulkanDevice>) -> Self
+	pub fn new(framebuffer_size: Size, device: VulkanDevice) -> Self
 	{
-		let device = Arc::clone(device);
-
 		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
 			Self::init_swapchain(framebuffer_size, &device);
 		let mut frames = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT);
@@ -122,10 +121,10 @@ impl VulkanSwapchain
 		for _ in 0..Self::MAX_FRAMES_IN_FLIGHT
 		{
 			frames.push(VulkanFrame {
-				command_pool: VulkanCommandPool::new(Arc::downgrade(&device), QueueType::GRAPHICS),
-				completed_fence: Rc::new(VulkanFence::new(Arc::downgrade(&device), true)),
-				acquired_sem: VulkanSemaphore::new(Arc::downgrade(&device)),
-				present_sem: VulkanSemaphore::new(Arc::downgrade(&device)),
+				command_pool: VulkanCommandPool::new(&device, QueueType::GRAPHICS),
+				completed_fence: Rc::new(VulkanFence::new(&device, true)),
+				acquired_sem: VulkanSemaphore::new(&device),
+				present_sem: VulkanSemaphore::new(&device),
 			});
 		}
 
@@ -151,10 +150,11 @@ impl VulkanSwapchain
 			frames,
 			frame_resource_manager,
 			current_frame,
+			destroyed: false,
 		}
 	}
 
-	pub fn acquire(&mut self) -> Result<AcquiredSwapchainFrame, SwapchainError>
+	pub fn acquire(&mut self) -> Result<FrameInfo, SwapchainError>
 	{
 		assert!(
 			self.current_frame.load(Ordering::SeqCst) < Self::MAX_FRAMES_IN_FLIGHT as u32,
@@ -166,7 +166,7 @@ impl VulkanSwapchain
 		let frame = &mut self.frames[current_frame];
 
 		// Wait for the frame to have fully finished rendering before acquiring.
-		frame.completed_fence.wait();
+		frame.completed_fence.wait(&self.device);
 
 		// Clear frame resources
 		self.frame_resource_manager.clear_resources();
@@ -191,15 +191,23 @@ impl VulkanSwapchain
 
 				if let Some(ref fence) = image.available_fence
 				{
-					fence.wait();
+					fence.wait(&self.device);
 				}
 
 				image.available_fence = Some(Rc::clone(&frame.completed_fence));
 
-				Ok(AcquiredSwapchainFrame {
+				self.frames[current_frame]
+					.command_pool
+					.recycle(&self.device);
+				let command_buffer = self.frames[current_frame]
+					.command_pool
+					.begin_command_buffer(&self.device);
+
+				Ok(FrameInfo {
 					image_index,
 					frame_index: current_frame,
 					output_framebuffer: image.framebuffer,
+					command_buffer,
 				})
 			}
 			Ok((_, true)) => Err(SwapchainError::AcquireSuboptimal),
@@ -210,17 +218,21 @@ impl VulkanSwapchain
 	pub fn submit(
 		&mut self,
 		image_index: u32,
-		command_buffers: &[VulkanCommandBuffer],
+		command_buffer: VulkanCommandBuffer,
 	) -> Result<(), SwapchainError>
 	{
 		let current_frame = self.current_frame.load(Ordering::SeqCst) as usize;
+
+		self.frames[current_frame]
+			.command_pool
+			.end_command_buffer(&self.device, command_buffer);
 		let frame = &self.frames[current_frame];
 
 		let acquired_sem = &frame.acquired_sem;
 		let present_sem = &frame.present_sem;
 
 		unsafe {
-			frame.completed_fence.reset();
+			frame.completed_fence.reset(&self.device);
 
 			let graphics_queue = self.device.graphics_queue.lock().unwrap();
 			self.device
@@ -230,7 +242,7 @@ impl VulkanSwapchain
 					&[vk::SubmitInfo::builder()
 						.wait_semaphores(&[acquired_sem.get()])
 						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-						.command_buffers(&command_buffers)
+						.command_buffers(&[command_buffer])
 						.signal_semaphores(&[present_sem.get()])
 						.build()],
 					frame.completed_fence.get(),
@@ -296,7 +308,10 @@ impl VulkanSwapchain
 	fn destroy_swapchain(&mut self)
 	{
 		unsafe {
-			self.images.clear();
+			for image in std::mem::take(&mut self.images).into_iter()
+			{
+				image.destroy(&self.device);
+			}
 
 			self.device
 				.vk_device()
@@ -309,7 +324,7 @@ impl VulkanSwapchain
 
 	fn init_swapchain(
 		framebuffer_size: Size,
-		device: &Arc<VulkanDevice>,
+		device: &VulkanDevice,
 	) -> (
 		vk::Format,
 		vk::Extent2D,
@@ -494,7 +509,6 @@ impl VulkanSwapchain
 					image_view,
 					framebuffer,
 					available_fence: None,
-					device: Arc::downgrade(&device),
 				}
 			})
 			.collect();
@@ -533,19 +547,40 @@ impl VulkanSwapchain
 	{
 		self.render_pass
 	}
+
+	pub fn destroy(&mut self)
+	{
+		self.device.wait_idle();
+
+		self.destroy_swapchain();
+
+		for frame in std::mem::take(&mut self.frames).into_iter()
+		{
+			frame.destroy(&self.device);
+		}
+
+		for fence in std::mem::take(&mut self.frame_resource_manager.fences).into_iter()
+		{
+			if let Ok(fence) = Rc::try_unwrap(fence)
+			{
+				fence.destroy(&self.device);
+			}
+		}
+		self.destroyed = true;
+	}
 }
 
 impl Drop for VulkanSwapchain
 {
 	fn drop(&mut self)
 	{
-		self.device.wait_idle();
-		self.frames.clear();
-		self.destroy_swapchain();
+		assert!(
+			self.destroyed,
+			"destroy() was not called before VulkanSwapchain was dropped!"
+		);
 	}
 }
 
-#[derive(Clone)]
 struct SwapchainImage
 {
 	image: vk::Image,
@@ -553,17 +588,13 @@ struct SwapchainImage
 	framebuffer: vk::Framebuffer,
 
 	available_fence: Option<Rc<VulkanFence>>,
-
-	device: Weak<VulkanDevice>,
 }
 
-impl Drop for SwapchainImage
+impl VulkanDeviceChild for SwapchainImage
 {
-	fn drop(&mut self)
+	fn destroy(self, device: &VulkanDevice)
 	{
 		unsafe {
-			let device = self.device.upgrade().unwrap();
-
 			let vk_device = device.vk_device();
 
 			vk_device.destroy_framebuffer(self.framebuffer, None);
@@ -580,27 +611,26 @@ pub struct VulkanFrame
 	present_sem: VulkanSemaphore,
 }
 
-impl VulkanFrame
+impl VulkanDeviceChild for VulkanFrame
 {
-	pub fn recycle_command_pool(&mut self)
+	fn destroy(self, device: &VulkanDevice)
 	{
-		self.command_pool.recycle();
-	}
+		self.command_pool.destroy(device);
 
-	pub fn begin_command_buffer(&mut self) -> VulkanCommandBuffer
-	{
-		self.command_pool.begin_command_buffer()
-	}
+		if let Ok(completed_fence) = Rc::try_unwrap(self.completed_fence)
+		{
+			completed_fence.destroy(device);
+		}
 
-	pub fn end_command_buffer(&mut self, command_buffer: VulkanCommandBuffer)
-	{
-		self.command_pool.end_command_buffer(command_buffer)
+		self.acquired_sem.destroy(device);
+		self.present_sem.destroy(device);
 	}
 }
 
-pub struct AcquiredSwapchainFrame
+pub struct FrameInfo
 {
 	pub output_framebuffer: vk::Framebuffer,
 	pub image_index: u32,
 	pub frame_index: usize,
+	pub command_buffer: VulkanCommandBuffer,
 }
