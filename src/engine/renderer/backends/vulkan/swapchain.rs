@@ -1,6 +1,6 @@
 use super::{
 	command_pool::{QueueType, VulkanCommandBuffer, VulkanCommandPool},
-	device::{VulkanDevice, VulkanDeviceChild},
+	device::VulkanDevice,
 	fence::VulkanFence,
 	semaphore::VulkanSemaphore,
 	SwapchainError,
@@ -120,10 +120,10 @@ impl VulkanSwapchain
 		for _ in 0..Self::MAX_FRAMES_IN_FLIGHT
 		{
 			frames.push(VulkanFrame {
-				command_pool: VulkanCommandPool::new(&device, QueueType::GRAPHICS),
-				completed_fence: Rc::new(VulkanFence::new(&device, true)),
-				acquired_sem: VulkanSemaphore::new(&device),
-				present_sem: VulkanSemaphore::new(&device),
+				command_pool: device.create_command_pool(QueueType::GRAPHICS),
+				completed_fence: Rc::new(device.create_fence(true)),
+				acquired_sem: device.create_semaphore(),
+				present_sem: device.create_semaphore(),
 			});
 		}
 
@@ -173,7 +173,7 @@ impl VulkanSwapchain
 			self.swapchain_loader.acquire_next_image(
 				self.swapchain,
 				std::u64::MAX,
-				frame.acquired_sem.get(),
+				frame.acquired_sem.raw,
 				vk::Fence::null(),
 			)
 		}
@@ -238,12 +238,12 @@ impl VulkanSwapchain
 				.queue_submit(
 					*graphics_queue,
 					&[vk::SubmitInfo::builder()
-						.wait_semaphores(&[acquired_sem.get()])
+						.wait_semaphores(&[acquired_sem.raw])
 						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
 						.command_buffers(&[command_buffer])
-						.signal_semaphores(&[present_sem.get()])
+						.signal_semaphores(&[present_sem.raw])
 						.build()],
-					frame.completed_fence.get(),
+					frame.completed_fence.raw,
 				)
 				.unwrap();
 		}
@@ -258,7 +258,7 @@ impl VulkanSwapchain
 			self.swapchain_loader.queue_present(
 				*present_queue,
 				&vk::PresentInfoKHR::builder()
-					.wait_semaphores(&[present_sem.get()])
+					.wait_semaphores(&[present_sem.raw])
 					.swapchains(&[self.swapchain])
 					.image_indices(&[image_index]),
 			)
@@ -308,7 +308,8 @@ impl VulkanSwapchain
 		unsafe {
 			for image in std::mem::take(&mut self.images).into_iter()
 			{
-				image.destroy(&self.device);
+				self.device.raw.destroy_framebuffer(image.framebuffer, None);
+				self.device.raw.destroy_image_view(image.image_view, None);
 			}
 
 			self.device.raw.destroy_render_pass(self.render_pass, None);
@@ -501,7 +502,6 @@ impl VulkanSwapchain
 					.expect("Failed to create framebuffer!");
 
 				SwapchainImage {
-					image,
 					image_view,
 					framebuffer,
 					available_fence: None,
@@ -552,14 +552,22 @@ impl VulkanSwapchain
 
 		for frame in std::mem::take(&mut self.frames).into_iter()
 		{
-			frame.destroy(&self.device);
+			self.device.destroy_command_pool(frame.command_pool);
+
+			if let Ok(completed_fence) = Rc::try_unwrap(frame.completed_fence)
+			{
+				self.device.destroy_fence(completed_fence);
+			}
+
+			self.device.destroy_semaphore(frame.acquired_sem);
+			self.device.destroy_semaphore(frame.present_sem);
 		}
 
 		for fence in std::mem::take(&mut self.frame_resource_manager.fences).into_iter()
 		{
 			if let Ok(fence) = Rc::try_unwrap(fence)
 			{
-				fence.destroy(&self.device);
+				self.device.destroy_fence(fence);
 			}
 		}
 	}
@@ -567,24 +575,10 @@ impl VulkanSwapchain
 
 struct SwapchainImage
 {
-	image: vk::Image,
 	image_view: vk::ImageView,
 	framebuffer: vk::Framebuffer,
 
 	available_fence: Option<Rc<VulkanFence>>,
-}
-
-impl VulkanDeviceChild for SwapchainImage
-{
-	fn destroy(self, device: &VulkanDevice)
-	{
-		unsafe {
-			let vk_device = &device.raw;
-
-			vk_device.destroy_framebuffer(self.framebuffer, None);
-			vk_device.destroy_image_view(self.image_view, None);
-		}
-	}
 }
 
 pub struct VulkanFrame
@@ -593,22 +587,6 @@ pub struct VulkanFrame
 	completed_fence: Rc<VulkanFence>,
 	acquired_sem: VulkanSemaphore,
 	present_sem: VulkanSemaphore,
-}
-
-impl VulkanDeviceChild for VulkanFrame
-{
-	fn destroy(self, device: &VulkanDevice)
-	{
-		self.command_pool.destroy(device);
-
-		if let Ok(completed_fence) = Rc::try_unwrap(self.completed_fence)
-		{
-			completed_fence.destroy(device);
-		}
-
-		self.acquired_sem.destroy(device);
-		self.present_sem.destroy(device);
-	}
 }
 
 pub struct FrameInfo

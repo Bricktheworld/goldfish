@@ -1,4 +1,4 @@
-use super::device::{VulkanDevice, VulkanDeviceChild};
+use super::device::VulkanDevice;
 use ash::vk;
 
 pub enum QueueType
@@ -11,24 +11,22 @@ pub type VulkanCommandBuffer = vk::CommandBuffer;
 
 pub struct VulkanCommandPool
 {
-	command_pool: vk::CommandPool,
+	raw: vk::CommandPool,
 	command_buffers: Vec<VulkanCommandBuffer>,
 	index: usize,
-	destroyed: bool,
 }
 
-impl VulkanCommandPool
+impl VulkanDevice
 {
-	pub fn new(device: &VulkanDevice, queue_type: QueueType) -> Self
+	pub fn create_command_pool(&self, queue_type: QueueType) -> VulkanCommandPool
 	{
 		let queue_index = match queue_type
 		{
-			QueueType::GRAPHICS => device.get_queue_family_indices().graphics_family,
-			QueueType::COMPUTE => device.get_queue_family_indices().compute_family,
+			QueueType::GRAPHICS => self.get_queue_family_indices().graphics_family,
+			QueueType::COMPUTE => self.get_queue_family_indices().compute_family,
 		};
-		let command_pool = unsafe {
-			device
-				.raw
+		let raw = unsafe {
+			self.raw
 				.create_command_pool(
 					&vk::CommandPoolCreateInfo::builder().queue_family_index(queue_index),
 					None,
@@ -36,14 +34,21 @@ impl VulkanCommandPool
 				.unwrap()
 		};
 
-		Self {
-			command_pool,
+		VulkanCommandPool {
+			raw,
 			command_buffers: vec![],
 			index: 0,
-			destroyed: false,
 		}
 	}
 
+	pub fn destroy_command_pool(&self, command_pool: VulkanCommandPool)
+	{
+		unsafe { self.raw.destroy_command_pool(command_pool.raw, None) }
+	}
+}
+
+impl VulkanCommandPool
+{
 	pub fn begin_command_buffer(&mut self, device: &VulkanDevice) -> VulkanCommandBuffer
 	{
 		assert!(
@@ -89,10 +94,7 @@ impl VulkanCommandPool
 		unsafe {
 			device
 				.raw
-				.reset_command_pool(
-					self.command_pool,
-					vk::CommandPoolResetFlags::RELEASE_RESOURCES,
-				)
+				.reset_command_pool(self.raw, vk::CommandPoolResetFlags::RELEASE_RESOURCES)
 				.expect("Failed to recycle command pool!");
 		}
 		self.index = 0;
@@ -105,7 +107,7 @@ impl VulkanCommandPool
 				.raw
 				.allocate_command_buffers(
 					&vk::CommandBufferAllocateInfo::builder()
-						.command_pool(self.command_pool)
+						.command_pool(self.raw)
 						.level(vk::CommandBufferLevel::PRIMARY)
 						.command_buffer_count(1),
 				)
@@ -115,25 +117,5 @@ impl VulkanCommandPool
 		.unwrap();
 
 		self.command_buffers.push(new_cmd_buffer);
-	}
-}
-
-impl VulkanDeviceChild for VulkanCommandPool
-{
-	fn destroy(mut self, device: &VulkanDevice)
-	{
-		unsafe { device.raw.destroy_command_pool(self.command_pool, None) }
-		self.destroyed = true;
-	}
-}
-
-impl Drop for VulkanCommandPool
-{
-	fn drop(&mut self)
-	{
-		assert!(
-			self.destroyed,
-			"destroy(&VulkanDevice) was not called before VulkanCommandPool was dropped!"
-		);
 	}
 }

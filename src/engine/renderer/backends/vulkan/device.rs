@@ -46,11 +46,6 @@ pub struct VulkanDevice
 	pub scratch_fence: Option<VulkanFence>,
 }
 
-pub trait VulkanDeviceChild
-{
-	fn destroy(self, device: &VulkanDevice) -> ();
-}
-
 pub struct SwapchainDetails
 {
 	pub capabilities: vk::SurfaceCapabilitiesKHR,
@@ -389,7 +384,7 @@ impl VulkanDevice
 					&[vk::SubmitInfo::builder()
 						.command_buffers(&[command_buffer])
 						.build()],
-					fence.get(),
+					fence.raw,
 				)
 				.expect("Failed to submit to graphics queue!");
 		}
@@ -405,7 +400,7 @@ impl VulkanDevice
 					&[vk::SubmitInfo::builder()
 						.command_buffers(&[command_buffer])
 						.build()],
-					fence.get(),
+					fence.raw,
 				)
 				.expect("Failed to submit to compute queue!");
 		}
@@ -485,8 +480,8 @@ impl VulkanUploadContext
 	pub fn new(device: &VulkanDevice) -> Self
 	{
 		Self {
-			fence: VulkanFence::new(device, false),
-			command_pool: VulkanCommandPool::new(device, QueueType::GRAPHICS),
+			fence: device.create_fence(false),
+			command_pool: device.create_command_pool(QueueType::GRAPHICS),
 			device: device.clone(),
 		}
 	}
@@ -528,11 +523,11 @@ impl VulkanUploadContext
 	}
 }
 
-impl VulkanDeviceChild for VulkanUploadContext
-{
-	fn destroy(self, device: &VulkanDevice)
-	{
-		self.fence.destroy(device);
-		self.command_pool.destroy(device);
-	}
-}
+// impl VulkanDeviceChild for VulkanUploadContext
+// {
+// 	fn destroy(self, device: &VulkanDevice)
+// 	{
+// 		self.fence.destroy(device);
+// 		self.command_pool.destroy(device);
+// 	}
+// }

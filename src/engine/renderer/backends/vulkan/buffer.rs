@@ -1,4 +1,4 @@
-use super::device::{VulkanDevice, VulkanDeviceChild, VulkanUploadContext};
+use super::device::{VulkanDevice, VulkanUploadContext};
 use crate::renderer::BufferUsage;
 use ash::vk;
 use gpu_allocator::vulkan as vma;
@@ -160,24 +160,21 @@ impl VulkanDevice
 				)
 			});
 
-			copy_buffer.destroy(&self);
+			self.destroy_buffer(copy_buffer);
 		}
 
 		return buffer;
 	}
-}
 
-impl VulkanDeviceChild for VulkanBuffer
-{
-	fn destroy(self, device: &VulkanDevice)
+	pub fn destroy_buffer(&self, buffer: VulkanBuffer)
 	{
 		unsafe {
-			device.raw.destroy_buffer(self.raw, None);
+			self.raw.destroy_buffer(buffer.raw, None);
 
-			let mut guard = device.vma.lock().unwrap();
+			let mut guard = self.vma.lock().unwrap();
 			let vma = guard.as_mut().unwrap();
 
-			vma.free(self.allocation)
+			vma.free(buffer.allocation)
 				.expect("Failed to free allocation!");
 		}
 	}

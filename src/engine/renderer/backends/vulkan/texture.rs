@@ -1,4 +1,4 @@
-use super::device::{VulkanDevice, VulkanDeviceChild};
+use super::device::VulkanDevice;
 use crate::renderer::{TextureFormat, TextureUsage};
 use ash::vk;
 use gpu_allocator::vulkan as vma;
@@ -188,22 +188,19 @@ impl VulkanDevice
 			usage,
 		}
 	}
-}
 
-impl VulkanDeviceChild for VulkanTexture
-{
-	fn destroy(self, device: &VulkanDevice)
+	pub fn destroy_texture(&self, texture: VulkanTexture)
 	{
 		unsafe {
-			device.raw.destroy_image(self.image, None);
-			device.raw.destroy_image_view(self.image_view, None);
-			device.raw.destroy_sampler(self.sampler, None);
+			self.raw.destroy_image(texture.image, None);
+			self.raw.destroy_image_view(texture.image_view, None);
+			self.raw.destroy_sampler(texture.sampler, None);
 		}
 
-		let mut guard = device.vma.lock().unwrap();
+		let mut guard = self.vma.lock().unwrap();
 		let vma = guard.as_mut().unwrap();
 
-		vma.free(self.allocation)
+		vma.free(texture.allocation)
 			.expect("Failed to free allocation!");
 	}
 }

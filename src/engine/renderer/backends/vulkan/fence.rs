@@ -1,15 +1,15 @@
-use super::device::{VulkanDevice, VulkanDeviceChild};
+use super::device::VulkanDevice;
 use ash::vk;
 
 #[derive(Clone)]
 pub struct VulkanFence
 {
-	fence: vk::Fence,
+	pub raw: vk::Fence,
 }
 
-impl VulkanFence
+impl VulkanDevice
 {
-	pub fn new(device: &VulkanDevice, signaled: bool) -> Self
+	pub fn create_fence(&self, signaled: bool) -> VulkanFence
 	{
 		unsafe {
 			let create_info = vk::FenceCreateInfo::builder().flags(
@@ -23,26 +23,31 @@ impl VulkanFence
 				},
 			);
 
-			let fence = device
+			let raw = self
 				.raw
 				.create_fence(&create_info, None)
 				.expect("Failed to create VulkanFence");
 
-			Self { fence }
+			VulkanFence { raw }
 		}
 	}
 
-	pub fn get(&self) -> vk::Fence
+	pub fn destroy_fence(&self, fence: VulkanFence)
 	{
-		self.fence
+		unsafe {
+			self.raw.destroy_fence(fence.raw, None);
+		}
 	}
+}
 
+impl VulkanFence
+{
 	pub fn wait(&self, device: &VulkanDevice)
 	{
 		unsafe {
 			device
 				.raw
-				.wait_for_fences(&[self.fence], true, std::u64::MAX)
+				.wait_for_fences(&[self.raw], true, std::u64::MAX)
 				.expect("Failed to wait for VulkanFence!");
 		}
 	}
@@ -55,7 +60,7 @@ impl VulkanFence
 				return;
 			}
 
-			let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.fence).collect();
+			let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.raw).collect();
 
 			device
 				.raw
@@ -69,18 +74,8 @@ impl VulkanFence
 		unsafe {
 			device
 				.raw
-				.reset_fences(&[self.fence])
+				.reset_fences(&[self.raw])
 				.expect("Failed to reset VulkanFence");
-		}
-	}
-}
-
-impl VulkanDeviceChild for VulkanFence
-{
-	fn destroy(self, device: &VulkanDevice)
-	{
-		unsafe {
-			device.raw.destroy_fence(self.fence, None);
 		}
 	}
 }
