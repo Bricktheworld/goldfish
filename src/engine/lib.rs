@@ -1,12 +1,15 @@
-mod renderer;
-mod types;
-mod window;
+pub mod renderer;
+pub mod types;
+pub mod window;
 
 use crate::types::Color;
 use rand::prelude::*;
 use renderer::{GraphicsContext, GraphicsDevice};
 use std::time::Duration;
 use window::Window;
+
+#[macro_use(defer)]
+extern crate scopeguard;
 
 pub struct GoldfishEngine
 {
@@ -20,7 +23,7 @@ impl GoldfishEngine
 	pub fn new(title: &'static str) -> Self
 	{
 		let window = Window::new(title).unwrap();
-		let (graphics_device, graphics_context) = GraphicsDevice::new(&window);
+		let (graphics_device, graphics_context) = GraphicsDevice::new_with_context(&window);
 
 		Self {
 			window,

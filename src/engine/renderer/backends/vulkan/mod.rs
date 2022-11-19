@@ -1,3 +1,4 @@
+mod buffer;
 mod command_pool;
 mod device;
 mod fence;
@@ -8,50 +9,36 @@ mod texture;
 
 use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
-use device::VulkanDevice;
 use swapchain::{FrameInfo, VulkanSwapchain};
 
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
-use std::sync::RwLockReadGuard;
 
 custom_error! {pub SwapchainError
 	SubmitSuboptimal = "Swapchain is suboptimal and needs to be recreated",
 	AcquireSuboptimal = "Swapchain is suboptimal and needs to be recreated"
 }
 
-#[derive(Clone)]
-pub struct VulkanGraphicsDevice
-{
-	device: VulkanDevice,
-}
+pub use buffer::VulkanBuffer;
+pub use device::VulkanDevice;
+pub use texture::VulkanTexture;
 
-impl VulkanGraphicsDevice
+impl VulkanDevice
 {
-	pub fn new(window: &Window) -> (Self, VulkanGraphicsContext)
+	pub fn new_with_context(window: &Window) -> (Self, VulkanGraphicsContext)
 	{
 		let device = VulkanDevice::new(window);
 		let swapchain = VulkanSwapchain::new(window.get_size(), device.clone());
 
 		(
-			Self { device },
+			device,
 			VulkanGraphicsContext {
 				swapchain,
 				current_frame_info: None,
 				output_framebuffer_is_bound: true,
 			},
 		)
-	}
-
-	pub fn wait_idle(&self)
-	{
-		self.device.wait_idle();
-	}
-
-	pub fn destroy(&mut self)
-	{
-		self.device.destroy();
 	}
 }
 

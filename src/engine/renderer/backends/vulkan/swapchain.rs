@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::{
 	atomic::{AtomicU32, Ordering},
-	Arc, RwLock, RwLockReadGuard,
+	Arc, RwLock,
 };
 
 pub struct VulkanSwapchain
@@ -31,7 +31,6 @@ pub struct VulkanSwapchain
 	frames: Vec<VulkanFrame>,
 	frame_resource_manager: VulkanFrameResourceManager,
 	current_frame: Arc<AtomicU32>,
-	destroyed: bool,
 }
 
 #[derive(Clone)]
@@ -150,7 +149,6 @@ impl VulkanSwapchain
 			frames,
 			frame_resource_manager,
 			current_frame,
-			destroyed: false,
 		}
 	}
 
@@ -564,18 +562,6 @@ impl VulkanSwapchain
 				fence.destroy(&self.device);
 			}
 		}
-		self.destroyed = true;
-	}
-}
-
-impl Drop for VulkanSwapchain
-{
-	fn drop(&mut self)
-	{
-		assert!(
-			self.destroyed,
-			"destroy() was not called before VulkanSwapchain was dropped!"
-		);
 	}
 }
 

@@ -1,11 +1,14 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
+
+use backends::vulkan::{VulkanBuffer, VulkanDevice, VulkanGraphicsContext, VulkanTexture};
 pub mod backends;
 
-use backends::vulkan::{VulkanGraphicsContext, VulkanGraphicsDevice};
-pub type GraphicsDevice = VulkanGraphicsDevice;
+pub type GraphicsDevice = VulkanDevice;
 pub type GraphicsContext = VulkanGraphicsContext;
+pub type GpuBuffer = VulkanBuffer;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextureFormat
 {
 	RGB8,
@@ -45,3 +48,36 @@ bitflags! {
 		const STORAGE    = 0x4;
 	}
 }
+
+bitflags! {
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+	pub struct BufferUsage: u16
+	{
+		const TransferSrc        = 0x1;
+		const TransferDst        = 0x2;
+		const UniformTexelBuffer = 0x4;
+		const StorageTexelBuffer = 0x8;
+		const UniformBuffer      = 0x10;
+		const StorageBuffer      = 0x20;
+		const IndexBuffer        = 0x40;
+		const VertexBuffer       = 0x80;
+	}
+}
+
+pub use gpu_allocator::MemoryLocation;
+
+pub struct Texture(VulkanTexture);
+
+pub struct Mesh
+{
+	index_buffer: GpuBuffer,
+	vertex_buffer: GpuBuffer,
+}
+
+// impl GraphicsDevice
+// {
+// 	pub fn create_mesh(&self) -> Mesh
+// 	{
+// 		Mesh {}
+// 	}
+// }

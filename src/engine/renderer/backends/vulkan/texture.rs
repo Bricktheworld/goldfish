@@ -17,8 +17,6 @@ pub struct VulkanTexture
 	allocation: vma::Allocation,
 	format: TextureFormat,
 	usage: TextureUsage,
-
-	destroyed: bool,
 }
 
 impl VulkanTexture {}
@@ -188,15 +186,13 @@ impl VulkanDevice
 			allocation,
 			format,
 			usage,
-
-			destroyed: false,
 		}
 	}
 }
 
 impl VulkanDeviceChild for VulkanTexture
 {
-	fn destroy(mut self, device: &VulkanDevice)
+	fn destroy(self, device: &VulkanDevice)
 	{
 		unsafe {
 			device.raw.destroy_image(self.image, None);
@@ -204,17 +200,10 @@ impl VulkanDeviceChild for VulkanTexture
 			device.raw.destroy_sampler(self.sampler, None);
 		}
 
-		self.destroyed = true;
-	}
-}
+		let mut guard = device.vma.lock().unwrap();
+		let vma = guard.as_mut().unwrap();
 
-impl Drop for VulkanTexture
-{
-	fn drop(&mut self)
-	{
-		assert!(
-			self.destroyed,
-			"destroy(&VulkanDevice) was not called before VulkanTexture was dropped!"
-		);
+		vma.free(self.allocation)
+			.expect("Failed to free allocation!");
 	}
 }

@@ -4,7 +4,6 @@ use ash::vk;
 pub struct VulkanSemaphore
 {
 	semaphore: vk::Semaphore,
-	destroyed: bool,
 }
 
 impl VulkanSemaphore
@@ -16,10 +15,7 @@ impl VulkanSemaphore
 				.raw
 				.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
 				.expect("Failed to create VulkanSemaphore");
-			Self {
-				semaphore,
-				destroyed: false,
-			}
+			Self { semaphore }
 		}
 	}
 
@@ -36,17 +32,5 @@ impl VulkanDeviceChild for VulkanSemaphore
 		unsafe {
 			device.raw.destroy_semaphore(self.semaphore, None);
 		}
-		self.destroyed = true;
-	}
-}
-
-impl Drop for VulkanSemaphore
-{
-	fn drop(&mut self)
-	{
-		assert!(
-			self.destroyed,
-			"destroy(&VulkanDevice) was not called before VulkanSemaphore was dropped!"
-		);
 	}
 }

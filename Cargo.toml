@@ -19,6 +19,12 @@ custom_error = "1.9.2"
 glam = "0.21.3"
 bitflags = "2.0.0-rc.1"
 rand = "0.8.5"
+russimp = { version = "1.0.4", default-features = false, features = [
+	"prebuilt",
+] }
+uuid = "1.2.1"
+serde = { version = "1.0.147", features = ["derive"] }
+scopeguard = "1.1.0"
 
 [lib]
 name = "goldfish"

@@ -1,6 +1,6 @@
 use crate::window::Window;
 
-use super::command_pool::VulkanCommandBuffer;
+use super::command_pool::{QueueType, VulkanCommandBuffer, VulkanCommandPool};
 use super::fence::VulkanFence;
 
 use ash::{
@@ -14,7 +14,7 @@ use gpu_allocator::vulkan as vma;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct VulkanDevice
@@ -42,6 +42,8 @@ pub struct VulkanDevice
 	pub depth_format: vk::Format,
 
 	queue_family_indices: QueueFamilyIndices,
+
+	pub scratch_fence: Option<VulkanFence>,
 }
 
 pub trait VulkanDeviceChild
@@ -367,6 +369,7 @@ impl VulkanDevice
 				depth_format,
 
 				queue_family_indices,
+				scratch_fence: None,
 			}
 		}
 	}
@@ -467,5 +470,69 @@ impl VulkanDevice
 	pub fn depth_format(&self) -> vk::Format
 	{
 		self.depth_format
+	}
+}
+
+pub struct VulkanUploadContext
+{
+	fence: VulkanFence,
+	command_pool: VulkanCommandPool,
+	device: VulkanDevice,
+}
+
+impl VulkanUploadContext
+{
+	pub fn new(device: &VulkanDevice) -> Self
+	{
+		Self {
+			fence: VulkanFence::new(device, false),
+			command_pool: VulkanCommandPool::new(device, QueueType::GRAPHICS),
+			device: device.clone(),
+		}
+	}
+
+	pub fn get_device(&self) -> &VulkanDevice
+	{
+		return &self.device;
+	}
+
+	pub fn submit<F>(&mut self, f: F, fence: Option<&VulkanFence>)
+	where
+		F: FnOnce(&ash::Device, VulkanCommandBuffer),
+	{
+		let cmd = self.command_pool.begin_command_buffer(&self.device);
+
+		f(&self.device.raw, cmd);
+
+		self.command_pool.end_command_buffer(&self.device, cmd);
+
+		self.device
+			.graphics_queue_submit(cmd, fence.unwrap_or(&self.fence));
+
+		self.command_pool.recycle(&self.device);
+	}
+
+	pub fn wait_submit<F>(&mut self, f: F)
+	where
+		F: FnOnce(&ash::Device, VulkanCommandBuffer),
+	{
+		let cmd = self.command_pool.begin_command_buffer(&self.device);
+
+		f(&self.device.raw, cmd);
+
+		self.command_pool.end_command_buffer(&self.device, cmd);
+
+		self.device.graphics_queue_submit(cmd, &self.fence);
+
+		self.command_pool.recycle(&self.device);
+	}
+}
+
+impl VulkanDeviceChild for VulkanUploadContext
+{
+	fn destroy(self, device: &VulkanDevice)
+	{
+		self.fence.destroy(device);
+		self.command_pool.destroy(device);
 	}
 }

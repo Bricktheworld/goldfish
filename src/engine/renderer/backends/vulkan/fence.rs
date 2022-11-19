@@ -1,10 +1,10 @@
 use super::device::{VulkanDevice, VulkanDeviceChild};
 use ash::vk;
 
+#[derive(Clone)]
 pub struct VulkanFence
 {
 	fence: vk::Fence,
-	destroyed: bool,
 }
 
 impl VulkanFence
@@ -28,10 +28,7 @@ impl VulkanFence
 				.create_fence(&create_info, None)
 				.expect("Failed to create VulkanFence");
 
-			Self {
-				fence,
-				destroyed: false,
-			}
+			Self { fence }
 		}
 	}
 
@@ -80,22 +77,10 @@ impl VulkanFence
 
 impl VulkanDeviceChild for VulkanFence
 {
-	fn destroy(mut self, device: &VulkanDevice)
+	fn destroy(self, device: &VulkanDevice)
 	{
 		unsafe {
 			device.raw.destroy_fence(self.fence, None);
 		}
-		self.destroyed = true;
-	}
-}
-
-impl Drop for VulkanFence
-{
-	fn drop(&mut self)
-	{
-		assert!(
-			self.destroyed,
-			"destroy(&VulkanDevice) was not called before VulkanFence was dropped!"
-		);
 	}
 }

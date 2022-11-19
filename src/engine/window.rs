@@ -1,9 +1,6 @@
 use crate::types::Size;
 use raw_window_handle::HasRawDisplayHandle;
-use std::{
-	cell::RefCell,
-	time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use winit::{
 	event::{Event, WindowEvent},
 	event_loop::{ControlFlow, EventLoop},
@@ -14,7 +11,6 @@ pub struct Window
 	name: &'static str,
 	winit_window: winit::window::Window,
 	event_loop: Option<EventLoop<()>>,
-	was_resized: bool,
 }
 
 pub type WindowRunContext = EventLoop<()>;
@@ -33,7 +29,6 @@ impl Window
 			name,
 			winit_window,
 			event_loop: Some(event_loop),
-			was_resized: false,
 		})
 	}
 
