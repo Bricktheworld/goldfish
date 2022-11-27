@@ -309,7 +309,7 @@ impl VulkanDevice
 					physical_device,
 					device: device.clone(),
 					debug_settings: Default::default(),
-					buffer_device_address: true,
+					buffer_device_address: false,
 				})
 				.expect("Failed to create Vulkan memory allocator!"),
 			)));
@@ -472,37 +472,41 @@ pub struct VulkanUploadContext
 	pub device: VulkanDevice,
 }
 
-impl VulkanUploadContext
+impl VulkanDevice
 {
-	pub fn new(device: &VulkanDevice) -> Self
+	pub fn create_upload_context(&self) -> VulkanUploadContext
 	{
-		Self {
-			fence: device.create_fence(false),
-			command_pool: device.create_command_pool(QueueType::GRAPHICS),
-			device: device.clone(),
+		VulkanUploadContext {
+			fence: self.create_fence(false),
+			command_pool: self.create_command_pool(QueueType::GRAPHICS),
+			device: self.clone(),
 		}
 	}
 
-	pub fn get_device(&self) -> &VulkanDevice
+	pub fn destroy_upload_context(&self, upload_context: VulkanUploadContext)
 	{
-		return &self.device;
+		self.destroy_fence(upload_context.fence);
+		self.destroy_command_pool(upload_context.command_pool);
 	}
+}
 
-	pub fn submit<F>(&mut self, f: F, fence: Option<&VulkanFence>)
-	where
-		F: FnOnce(&ash::Device, VulkanCommandBuffer),
-	{
-		let cmd = self.command_pool.begin_command_buffer(&self.device);
+impl VulkanUploadContext
+{
+	// pub fn submit<F>(&mut self, f: F, fence: Option<&VulkanFence>)
+	// where
+	// 	F: FnOnce(&ash::Device, VulkanCommandBuffer),
+	// {
+	// 	let cmd = self.command_pool.begin_command_buffer(&self.device);
 
-		f(&self.device.raw, cmd);
+	// 	f(&self.device.raw, cmd);
 
-		self.command_pool.end_command_buffer(&self.device, cmd);
+	// 	self.command_pool.end_command_buffer(&self.device, cmd);
 
-		self.device
-			.graphics_queue_submit(cmd, fence.unwrap_or(&self.fence));
+	// 	self.device
+	// 		.graphics_queue_submit(cmd, fence.unwrap_or(&self.fence));
 
-		self.command_pool.recycle(&self.device);
-	}
+	// 	self.command_pool.recycle(&self.device);
+	// }
 
 	pub fn wait_submit<F>(&mut self, f: F)
 	where
@@ -515,6 +519,8 @@ impl VulkanUploadContext
 		self.command_pool.end_command_buffer(&self.device, cmd);
 
 		self.device.graphics_queue_submit(cmd, &self.fence);
+
+		self.fence.wait(&self.device);
 
 		self.command_pool.recycle(&self.device);
 	}

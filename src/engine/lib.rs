@@ -70,13 +70,25 @@ impl GoldfishEngine
 	where
 		F: FnMut(&mut Self, Duration) + 'static,
 	{
+		let mut upload_context = self.graphics_device.create_upload_context();
+
 		let Package::Shader(shader_package) = self.read_package(
-			uuid!("07060963-a7eb-49a3-91c0-9e5b453773ee"),
+			uuid!("bedc27e1-f561-4c8d-bb96-6b11926b4ec8"),
 			AssetType::Shader,
 		).expect("Failed to load shader package!") else
 		{
             panic!("Incorrect package type loaded?");
 		};
+
+		let Package::Mesh(mesh_package) = self.read_package(
+				uuid!("471cb8ab-2bd0-4e91-9ea9-0d0573cb9e0a"),
+				AssetType::Mesh,
+        ).expect("Failed to load mesh package!") else
+        {
+            panic!("Incorrect package type loaded?");
+        };
+
+		let cube = upload_context.create_mesh(&mesh_package.vertices, &mesh_package.indices);
 
 		let vertex_shader = self
 			.graphics_device
@@ -104,10 +116,12 @@ impl GoldfishEngine
 			0,
 		);
 
+		self.graphics_device.destroy_mesh(cube);
 		self.graphics_device.destroy_raster_pipeline(pipeline);
 		self.graphics_device.destroy_shader(vertex_shader);
 		self.graphics_device.destroy_shader(pixel_shader);
 		self.graphics_device.destroy_render_pass(render_pass);
+		self.graphics_device.destroy_upload_context(upload_context);
 
 		let mut rng = rand::thread_rng();
 		Window::run(self.window.get_run_context(), move |dt, new_size| {

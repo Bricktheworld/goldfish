@@ -104,15 +104,21 @@ pub struct AttachmentDescription
 
 pub struct Texture(VulkanTexture);
 
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
+use crate::types::{Vec2Serde, Vec3Serde};
+#[repr(C)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct Vertex
 {
-	position: Vec3,
-	normal: Vec3,
-	uv: Vec2,
-	tangent: Vec3,
-	bitangent: Vec3,
+	#[serde(with = "Vec3Serde")]
+	pub position: Vec3,
+	#[serde(with = "Vec3Serde")]
+	pub normal: Vec3,
+	#[serde(with = "Vec2Serde")]
+	pub uv: Vec2,
+	#[serde(with = "Vec3Serde")]
+	pub tangent: Vec3,
+	#[serde(with = "Vec3Serde")]
+	pub bitangent: Vec3,
 }
 
 unsafe impl bytemuck::Pod for Vertex {}
@@ -120,8 +126,8 @@ unsafe impl bytemuck::Zeroable for Vertex {}
 
 pub struct Mesh
 {
-	vertex_buffer: GpuBuffer,
-	index_buffer: GpuBuffer,
+	pub vertex_buffer: GpuBuffer,
+	pub index_buffer: GpuBuffer,
 }
 
 impl UploadContext

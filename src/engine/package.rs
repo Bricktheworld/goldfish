@@ -28,7 +28,7 @@ impl AssetType
 
 pub enum Package
 {
-	// Mesh(MeshPackage),
+	Mesh(MeshPackage),
 	Shader(ShaderPackage),
 	Text(String),
 	Bin(Vec<u8>),
@@ -41,10 +41,11 @@ pub struct ShaderPackage
 	pub ps_ir: Option<Vec<u32>>,
 }
 
-// #[derive(Serialize, Deserialize)]
-// pub struct MeshPackage
-// {
-// 	pub vertices: Vec<Vertex>,
-// }
+#[derive(Serialize, Deserialize)]
+pub struct MeshPackage
+{
+	pub vertices: Vec<Vertex>,
+	pub indices: Vec<u16>,
+}
 
 pub type ReadAssetFn = fn(Uuid, AssetType) -> GoldfishResult<Package>;

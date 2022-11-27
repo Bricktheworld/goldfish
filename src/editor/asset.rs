@@ -2,7 +2,7 @@ use super::shader_compiler;
 use super::{EditorError, BUILD_ASSET_DIR};
 use bincode::serialize;
 use filetime::FileTime;
-use goldfish::package::{AssetType, Package, ShaderPackage};
+use goldfish::package::{AssetType, MeshPackage, Package, ShaderPackage};
 use goldfish::renderer::TextureFormat;
 use goldfish::{GoldfishError, GoldfishResult};
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,7 @@ pub enum AdditionalAssetData
 #[derive(Serialize, Deserialize)]
 pub struct Asset
 {
-	pub uuid: Uuid,
+	pub uuids: Vec<Uuid>,
 	pub version: Version,
 	pub asset_type: AssetType,
 	pub additional_data: AdditionalAssetData,
@@ -95,9 +95,9 @@ impl Asset
 {
 	const CURRENT_ASSET_VERSION: Version = Version::new(1, 0);
 
-	pub fn new(asset_type: AssetType) -> Self
+	pub fn new(asset_type: AssetType, count: u32) -> Self
 	{
-		let uuid = Uuid::new_v4();
+		// let uuid = Uuid::new_v4();
 
 		let additional_data = match asset_type
 		{
@@ -110,7 +110,7 @@ impl Asset
 		};
 
 		Self {
-			uuid,
+			uuids: (0..count).map(|_| Uuid::new_v4()).collect::<Vec<_>>(),
 			version: Self::CURRENT_ASSET_VERSION,
 			asset_type,
 			additional_data,
@@ -153,6 +153,15 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError>
 
 			let mut meta_file_was_created = false;
 
+			let mut mesh_packages: Option<Vec<MeshPackage>> = None;
+
+			let import_mesh_packages = || -> Result<Option<Vec<MeshPackage>>, EditorError> {
+				let extension = asset_path.extension().unwrap().to_str().unwrap();
+				let data =
+					fs::read(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
+				Ok(Some(super::mesh_importer::import_mesh(&data, &extension)?))
+			};
+
 			let asset = if meta_path.exists()
 			{
 				match fs::read_to_string(&meta_path)
@@ -180,7 +189,17 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError>
 					meta_path.as_path().to_str().unwrap()
 				);
 
-				let metadata = Asset::new(asset_type);
+				mesh_packages = match asset_type
+				{
+					AssetType::Mesh => import_mesh_packages()?,
+					_ => None,
+				};
+
+				let metadata = match mesh_packages
+				{
+					Some(ref mesh_packages) => Asset::new(asset_type, mesh_packages.len() as u32),
+					None => Asset::new(asset_type, 1),
+				};
 
 				let serialized = serde_json::to_string_pretty(&metadata)
 					.map_err(move |_| EditorError::Serialize)?;
@@ -192,73 +211,93 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError>
 				metadata
 			};
 
-			let build_path = Path::new(BUILD_ASSET_DIR)
-				.join(asset.uuid.to_string())
-				.with_extension(BUILD_ASSET_EXTENSION);
-
-			let mut needs_reimport = asset.version != Asset::CURRENT_ASSET_VERSION
-				|| meta_file_was_created
-				|| !build_path.is_file();
-
-			if !needs_reimport
+			for (i, uuid) in asset.uuids.iter().enumerate()
 			{
-				let build_meta =
-					fs::metadata(&build_path).map_err(move |err| EditorError::Filesystem(err))?;
-				let asset_meta =
-					fs::metadata(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
-				let meta_meta =
-					fs::metadata(&meta_path).map_err(move |err| EditorError::Filesystem(err))?;
+				let build_path = Path::new(BUILD_ASSET_DIR)
+					.join(uuid.to_string())
+					.with_extension(BUILD_ASSET_EXTENSION);
 
-				let asset_modified_time = FileTime::from_last_modification_time(&asset_meta);
-				let build_modified_time = FileTime::from_last_modification_time(&build_meta);
-				let meta_modified_time = FileTime::from_last_modification_time(&meta_meta);
+				let mut needs_reimport = asset.version != Asset::CURRENT_ASSET_VERSION
+					|| meta_file_was_created
+					|| !build_path.is_file();
 
-				needs_reimport = asset_modified_time > build_modified_time
-					|| meta_modified_time > build_modified_time;
-			}
-
-			if needs_reimport
-			{
-				let serialized = match asset.asset_type
+				if !needs_reimport
 				{
-					AssetType::Shader =>
-					{
-						let shader_data = fs::read_to_string(&asset_path)
-							.map_err(move |err| EditorError::Filesystem(err))?;
-						let shader_asset =
-							shader_compiler::compile_hlsl(&asset_path, &shader_data)?;
-
-						Some(
-							bincode::serialize(&shader_asset)
-								.map_err(move |_| EditorError::Serialize)?,
-						)
-					}
-					_ => None,
-				};
-
-				if let Some(serialized) = serialized
-				{
-					let mut output = fs::File::create(&build_path)
+					let build_meta = fs::metadata(&build_path)
 						.map_err(move |err| EditorError::Filesystem(err))?;
-					output
-						.write_all(&serialized)
+					let asset_meta = fs::metadata(&asset_path)
+						.map_err(move |err| EditorError::Filesystem(err))?;
+					let meta_meta = fs::metadata(&meta_path)
 						.map_err(move |err| EditorError::Filesystem(err))?;
 
-					// Touch asset files
-					let now = FileTime::now();
-					if let Err(err) = filetime::set_file_mtime(&build_path, now)
-					{
-						println!("WARNING: Failed to update date modified for build file {}! Maybe it wasn't created properly? {}", build_path.as_path().to_str().unwrap_or("UNKNOWN_BUILD_PATH"), err);
-					}
+					let asset_modified_time = FileTime::from_last_modification_time(&asset_meta);
+					let build_modified_time = FileTime::from_last_modification_time(&build_meta);
+					let meta_modified_time = FileTime::from_last_modification_time(&meta_meta);
 
-					if let Err(err) = filetime::set_file_mtime(&meta_path, now)
-					{
-						println!("WARNING: Failed to update date modified for metadata file! Maybe it wasn't created properly? {}", err);
-					}
+					needs_reimport = asset_modified_time > build_modified_time
+						|| meta_modified_time > build_modified_time;
 				}
-				else
+
+				if needs_reimport
 				{
-					println!("No output was created for asset {}!", asset.uuid);
+					let serialized = match asset.asset_type
+					{
+						AssetType::Shader =>
+						{
+							let shader_data = fs::read_to_string(&asset_path)
+								.map_err(move |err| EditorError::Filesystem(err))?;
+							let shader_asset =
+								shader_compiler::compile_hlsl(&asset_path, &shader_data)?;
+
+							Some(
+								bincode::serialize(&shader_asset)
+									.map_err(move |_| EditorError::Serialize)?,
+							)
+						}
+						AssetType::Mesh =>
+						{
+							if mesh_packages.is_none()
+							{
+								mesh_packages = import_mesh_packages()?;
+							}
+
+							let Some(ref mesh_packages) = mesh_packages else
+							{
+								panic!("??");
+							};
+
+							Some(
+								bincode::serialize(&mesh_packages[i])
+									.map_err(move |_| EditorError::Serialize)?,
+							)
+						}
+						_ => None,
+					};
+
+					if let Some(serialized) = serialized
+					{
+						let mut output = fs::File::create(&build_path)
+							.map_err(move |err| EditorError::Filesystem(err))?;
+						output
+							.write_all(&serialized)
+							.map_err(move |err| EditorError::Filesystem(err))?;
+
+						// Touch asset files
+						let now = FileTime::now();
+						if let Err(err) = filetime::set_file_mtime(&build_path, now)
+						{
+							println!("WARNING: Failed to update date modified for build file {}! Maybe it wasn't created properly? {}", build_path.as_path().to_str().unwrap_or("UNKNOWN_BUILD_PATH"), err);
+						}
+
+						if let Err(err) = filetime::set_file_mtime(&meta_path, now)
+						{
+							println!("WARNING: Failed to update date modified for metadata file! Maybe it wasn't created properly? {}", err);
+						}
+					}
+					else
+					{
+						println!("No output was created for asset {}!", uuid);
+					}
 				}
 			}
 		}
@@ -288,6 +327,20 @@ pub fn read_asset(uuid: Uuid, asset_type: AssetType) -> GoldfishResult<Package>
 
 			Ok(Package::Shader(package))
 		}
-		_ => Err(GoldfishError::Unknown("Not handling yet!".to_string())),
+		AssetType::Mesh =>
+		{
+			let contents =
+				fs::read(&build_path).map_err(move |err| GoldfishError::Filesystem(err))?;
+
+			let package = bincode::deserialize::<MeshPackage>(&contents).map_err(move |err| {
+				GoldfishError::Unknown(
+					"Failed to deserialize mesh package: ".to_string()
+						+ &err.to_string() + ". Try cleaning '.build' and reimporting all assets.",
+				)
+			})?;
+
+			Ok(Package::Mesh(package))
+		}
+		_ => unimplemented!(),
 	}
 }

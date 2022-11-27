@@ -1,4 +1,5 @@
 mod asset;
+mod mesh_importer;
 mod shader_compiler;
 use goldfish::GoldfishEngine;
 use std::path::Path;
@@ -13,6 +14,8 @@ const BUILD_ASSET_DIR: &'static str = ".build/assets/";
 #[derive(Error, Debug)]
 pub enum EditorError
 {
+	#[error("Failed to import mesh: {0}")]
+	MeshImport(russimp::RussimpError),
 	#[error("Failed to compile shader: {0}")]
 	ShaderCompilation(hassle_rs::HassleError),
 	#[error("Failed to reflect spirv: {0}")]
