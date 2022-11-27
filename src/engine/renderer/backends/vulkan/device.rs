@@ -19,8 +19,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct VulkanDevice
 {
-	entry: Entry,
-
 	pub instance: Arc<ash::Instance>,
 	pub physical_device: vk::PhysicalDevice,
 	pub physical_device_properties: vk::PhysicalDeviceProperties,
@@ -342,7 +340,6 @@ impl VulkanDevice
 			let depth_format = depth_format.expect("No depth format found on this device!");
 
 			Self {
-				entry,
 				instance: Arc::new(instance),
 				physical_device,
 				physical_device_properties,
@@ -470,9 +467,9 @@ impl VulkanDevice
 
 pub struct VulkanUploadContext
 {
-	fence: VulkanFence,
-	command_pool: VulkanCommandPool,
-	device: VulkanDevice,
+	pub fence: VulkanFence,
+	pub command_pool: VulkanCommandPool,
+	pub device: VulkanDevice,
 }
 
 impl VulkanUploadContext
@@ -522,12 +519,3 @@ impl VulkanUploadContext
 		self.command_pool.recycle(&self.device);
 	}
 }
-
-// impl VulkanDeviceChild for VulkanUploadContext
-// {
-// 	fn destroy(self, device: &VulkanDevice)
-// 	{
-// 		self.fence.destroy(device);
-// 		self.command_pool.destroy(device);
-// 	}
-// }

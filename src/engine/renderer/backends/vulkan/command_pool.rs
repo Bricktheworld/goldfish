@@ -1,5 +1,6 @@
 use super::device::VulkanDevice;
 use ash::vk;
+use tracy_client as tracy;
 
 pub enum QueueType
 {
@@ -20,6 +21,7 @@ impl VulkanDevice
 {
 	pub fn create_command_pool(&self, queue_type: QueueType) -> VulkanCommandPool
 	{
+		tracy::span!();
 		let queue_index = match queue_type
 		{
 			QueueType::GRAPHICS => self.get_queue_family_indices().graphics_family,
@@ -43,6 +45,7 @@ impl VulkanDevice
 
 	pub fn destroy_command_pool(&self, command_pool: VulkanCommandPool)
 	{
+		tracy::span!();
 		unsafe { self.raw.destroy_command_pool(command_pool.raw, None) }
 	}
 }
@@ -51,6 +54,7 @@ impl VulkanCommandPool
 {
 	pub fn begin_command_buffer(&mut self, device: &VulkanDevice) -> VulkanCommandBuffer
 	{
+		tracy::span!();
 		assert!(
 			self.index <= self.command_buffers.len(),
 			"Invalid command buffer index!"
@@ -79,6 +83,7 @@ impl VulkanCommandPool
 
 	pub fn end_command_buffer(&mut self, device: &VulkanDevice, command_buffer: VulkanCommandBuffer)
 	{
+		tracy::span!();
 		unsafe {
 			device
 				.raw
@@ -91,6 +96,7 @@ impl VulkanCommandPool
 
 	pub fn recycle(&mut self, device: &VulkanDevice)
 	{
+		tracy::span!();
 		unsafe {
 			device
 				.raw
@@ -102,6 +108,7 @@ impl VulkanCommandPool
 
 	fn expand(&mut self, device: &VulkanDevice)
 	{
+		tracy::span!();
 		let new_cmd_buffer = *unsafe {
 			device
 				.raw

@@ -3,7 +3,10 @@ mod command_pool;
 mod device;
 mod fence;
 mod framebuffer;
+mod pipeline;
+mod render_pass;
 mod semaphore;
+mod shader;
 mod swapchain;
 mod texture;
 
@@ -14,6 +17,7 @@ use swapchain::{FrameInfo, VulkanSwapchain};
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
+use tracy_client as tracy;
 
 custom_error! {pub SwapchainError
 	SubmitSuboptimal = "Swapchain is suboptimal and needs to be recreated",
@@ -21,7 +25,10 @@ custom_error! {pub SwapchainError
 }
 
 pub use buffer::VulkanBuffer;
-pub use device::VulkanDevice;
+pub use device::{VulkanDevice, VulkanUploadContext};
+pub use pipeline::VulkanPipeline;
+pub use render_pass::VulkanRenderPass;
+pub use shader::VulkanShader;
 pub use texture::VulkanTexture;
 
 impl VulkanDevice
@@ -78,12 +85,6 @@ impl VulkanGraphicsContext
 	{
 		if let Some(current_frame_info) = self.current_frame_info.take()
 		{
-			// {
-			// 	let frame = self.swapchain.get_frame_mut(current_frame_info.frame_index);
-
-			// 	frame.end_command_buffer(&self.swapchain.device, current_frame_info.command_buffer);
-			// }
-
 			if let Err(_) = self.swapchain.submit(
 				current_frame_info.image_index,
 				current_frame_info.command_buffer,
@@ -100,6 +101,7 @@ impl VulkanGraphicsContext
 
 	pub fn bind_output_framebuffer(&mut self, color: Color)
 	{
+		tracy::span!();
 		let cmd = self.get_command_buffer();
 
 		unsafe {
@@ -179,11 +181,32 @@ impl VulkanGraphicsContext
 
 	pub fn on_resize(&mut self, framebuffer_size: Size)
 	{
+		tracy::span!();
 		self.swapchain.invalidate(framebuffer_size);
 	}
 
 	pub fn destroy(&mut self)
 	{
 		self.swapchain.destroy();
+	}
+}
+
+use crate::renderer::TextureFormat;
+
+impl TextureFormat
+{
+	fn to_vk(&self, device: &VulkanDevice) -> vk::Format
+	{
+		match self
+		{
+			TextureFormat::RGB8 | TextureFormat::CubemapRGB8 => vk::Format::R8G8B8_UNORM,
+			TextureFormat::RGB16 | TextureFormat::CubemapRGB16 => vk::Format::R16G16B16_UNORM,
+			TextureFormat::RGBA8 | TextureFormat::CubemapRGBA8 => vk::Format::R8G8B8A8_UNORM,
+
+			TextureFormat::RGBA16 | TextureFormat::CubemapRGBA16 => vk::Format::R16G16B16A16_UNORM,
+			TextureFormat::SRGB8 | TextureFormat::CubemapSRGB8 => vk::Format::R8G8B8_SRGB,
+			TextureFormat::SRGBA8 | TextureFormat::CubemapSRGBA8 => vk::Format::R8G8B8A8_SRGB,
+			TextureFormat::Depth => device.depth_format(),
+		}
 	}
 }

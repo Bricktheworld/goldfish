@@ -1,5 +1,6 @@
 use super::device::VulkanDevice;
 use ash::vk;
+use tracy_client as tracy;
 
 #[derive(Clone)]
 pub struct VulkanFence
@@ -11,6 +12,7 @@ impl VulkanDevice
 {
 	pub fn create_fence(&self, signaled: bool) -> VulkanFence
 	{
+		tracy::span!();
 		unsafe {
 			let create_info = vk::FenceCreateInfo::builder().flags(
 				if signaled
@@ -34,6 +36,7 @@ impl VulkanDevice
 
 	pub fn destroy_fence(&self, fence: VulkanFence)
 	{
+		tracy::span!();
 		unsafe {
 			self.raw.destroy_fence(fence.raw, None);
 		}
@@ -44,6 +47,7 @@ impl VulkanFence
 {
 	pub fn wait(&self, device: &VulkanDevice)
 	{
+		tracy::span!();
 		unsafe {
 			device
 				.raw
@@ -54,6 +58,7 @@ impl VulkanFence
 
 	pub fn wait_multiple(device: &VulkanDevice, fences: &[&VulkanFence], wait_all: bool)
 	{
+		tracy::span!();
 		unsafe {
 			if fences.is_empty()
 			{
@@ -71,6 +76,7 @@ impl VulkanFence
 
 	pub fn reset(&self, device: &VulkanDevice)
 	{
+		tracy::span!();
 		unsafe {
 			device
 				.raw

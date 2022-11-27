@@ -68,9 +68,61 @@ pub struct VulkanBuffer
 	pub size: usize,
 }
 
+impl VulkanUploadContext
+{
+	pub fn create_buffer(
+		&mut self,
+		size: usize,
+		location: MemoryLocation,
+		mut usage: BufferUsage,
+		alignment: Option<u64>,
+		data: Option<&[u8]>,
+	) -> VulkanBuffer
+	{
+		if data.is_some()
+		{
+			usage |= BufferUsage::TransferDst;
+		}
+
+		let buffer = self
+			.device
+			.create_empty_buffer(size, location, usage, alignment);
+
+		if let Some(data) = data
+		{
+			let mut copy_buffer = self.device.create_empty_buffer(
+				size,
+				MemoryLocation::CpuToGpu,
+				BufferUsage::TransferSrc,
+				None,
+			);
+
+			copy_buffer.allocation.mapped_slice_mut().unwrap()[0..data.len()].copy_from_slice(data);
+
+			self.wait_submit(|device, cmd| unsafe {
+				device.cmd_copy_buffer(
+					cmd,
+					copy_buffer.raw,
+					buffer.raw,
+					&[vk::BufferCopy::builder().size(size as u64).build()],
+				)
+			});
+
+			self.destroy_buffer(copy_buffer);
+		}
+
+		return buffer;
+	}
+
+	pub fn destroy_buffer(&self, buffer: VulkanBuffer)
+	{
+		self.device.destroy_buffer(buffer);
+	}
+}
+
 impl VulkanDevice
 {
-	fn create_buffer_impl(
+	pub fn create_empty_buffer(
 		&self,
 		size: usize,
 		location: MemoryLocation,
@@ -121,49 +173,6 @@ impl VulkanDevice
 			usage,
 			size,
 		}
-	}
-
-	pub fn create_buffer(
-		&self,
-		upload_context: &mut VulkanUploadContext,
-		size: usize,
-		location: MemoryLocation,
-		mut usage: BufferUsage,
-		alignment: Option<u64>,
-		data: Option<&[u8]>,
-	) -> VulkanBuffer
-	{
-		if data.is_some()
-		{
-			usage |= BufferUsage::TransferDst;
-		}
-
-		let buffer = self.create_buffer_impl(size, location, usage, alignment);
-
-		if let Some(data) = data
-		{
-			let mut copy_buffer = self.create_buffer_impl(
-				size,
-				MemoryLocation::CpuToGpu,
-				BufferUsage::TransferSrc,
-				None,
-			);
-
-			copy_buffer.allocation.mapped_slice_mut().unwrap()[0..data.len()].copy_from_slice(data);
-
-			upload_context.wait_submit(|device, cmd| unsafe {
-				device.cmd_copy_buffer(
-					cmd,
-					copy_buffer.raw,
-					buffer.raw,
-					&[vk::BufferCopy::builder().size(size as u64).build()],
-				)
-			});
-
-			self.destroy_buffer(copy_buffer);
-		}
-
-		return buffer;
 	}
 
 	pub fn destroy_buffer(&self, buffer: VulkanBuffer)

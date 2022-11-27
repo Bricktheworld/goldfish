@@ -58,17 +58,7 @@ impl VulkanDevice
 		let mut guard = self.vma.lock().unwrap();
 		let vma = guard.as_mut().unwrap();
 
-		let vk_format = match format
-		{
-			TextureFormat::RGB8 | TextureFormat::CubemapRGB8 => vk::Format::R8G8B8_UNORM,
-			TextureFormat::RGB16 | TextureFormat::CubemapRGB16 => vk::Format::R16G16B16_UNORM,
-			TextureFormat::RGBA8 | TextureFormat::CubemapRGBA8 => vk::Format::R8G8B8A8_UNORM,
-
-			TextureFormat::RGBA16 | TextureFormat::CubemapRGBA16 => vk::Format::R16G16B16A16_UNORM,
-			TextureFormat::SRGB8 | TextureFormat::CubemapSRGB8 => vk::Format::R8G8B8_SRGB,
-			TextureFormat::SRGBA8 | TextureFormat::CubemapSRGBA8 => vk::Format::R8G8B8A8_SRGB,
-			TextureFormat::Depth => self.depth_format(),
-		};
+		let vk_format = format.to_vk(self);
 
 		let image = unsafe {
 			self.raw

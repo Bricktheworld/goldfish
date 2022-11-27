@@ -15,6 +15,7 @@ use std::sync::{
 	atomic::{AtomicU32, Ordering},
 	Arc, RwLock,
 };
+use tracy_client as tracy;
 
 pub struct VulkanSwapchain
 {
@@ -158,6 +159,7 @@ impl VulkanSwapchain
 			self.current_frame.load(Ordering::SeqCst) < Self::MAX_FRAMES_IN_FLIGHT as u32,
 			"Invalid swapchain current frame!"
 		);
+		tracy::span!();
 
 		// Get the current frame that we are processing
 		let current_frame = self.current_frame.load(Ordering::SeqCst) as usize;
@@ -219,6 +221,7 @@ impl VulkanSwapchain
 		command_buffer: VulkanCommandBuffer,
 	) -> Result<(), SwapchainError>
 	{
+		tracy::span!();
 		let current_frame = self.current_frame.load(Ordering::SeqCst) as usize;
 
 		self.frames[current_frame]
@@ -288,6 +291,7 @@ impl VulkanSwapchain
 
 	pub fn invalidate(&mut self, framebuffer_size: Size)
 	{
+		tracy::span!();
 		self.device.wait_idle();
 
 		self.destroy_swapchain();
@@ -305,6 +309,7 @@ impl VulkanSwapchain
 
 	fn destroy_swapchain(&mut self)
 	{
+		tracy::span!();
 		unsafe {
 			for image in std::mem::take(&mut self.images).into_iter()
 			{
@@ -331,6 +336,7 @@ impl VulkanSwapchain
 		Vec<SwapchainImage>,
 	)
 	{
+		tracy::span!();
 		let swapchain_details = device.query_swapchain_details();
 
 		let capabilities = &swapchain_details.capabilities;
@@ -546,6 +552,7 @@ impl VulkanSwapchain
 
 	pub fn destroy(&mut self)
 	{
+		tracy::span!();
 		self.device.wait_idle();
 
 		self.destroy_swapchain();
