@@ -13,6 +13,7 @@ use backends::vulkan::{
 	VulkanUploadContext,
 };
 use glam::{Vec2, Vec3};
+use std::collections::HashMap;
 use tracy_client as tracy;
 pub mod backends;
 
@@ -118,6 +119,18 @@ pub struct AttachmentDescription {
 	pub usage: TextureUsage,
 	pub load_op: LoadOp,
 	pub store_op: StoreOp,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DescriptorBindingType {
+	UniformBuffer,
+	Sampler,
+	SampledImage,
+}
+
+#[derive(Clone, Debug)]
+pub struct DescriptorSetInfo {
+	pub bindings: HashMap<u32, DescriptorBindingType>,
 }
 
 use crate::types::{Vec2Serde, Vec3Serde};

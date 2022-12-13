@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+pub mod build;
+pub mod game;
 pub mod package;
 pub mod renderer;
 pub mod tracy_gpu;

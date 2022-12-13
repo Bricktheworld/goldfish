@@ -3,6 +3,10 @@ name = "game"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+glam = "0.21.3"
+goldfish = { path = "../goldfish" }
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
@@ -10,3 +14,9 @@ thiserror = "1.0.37"
 hassle-rs = "0.9.0"
 spirv-reflect = "0.2.3"
 byteorder = "1.4.3"
+goldfish = { path = "../goldfish" }
+
+[lib]
+name = "game"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]

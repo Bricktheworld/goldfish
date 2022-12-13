@@ -4,7 +4,9 @@
 mod asset;
 mod mesh_importer;
 mod shader_compiler;
+use goldfish::game::{CreateGamelibApi, GameLib};
 use goldfish::GoldfishEngine;
+use libloading::{Library, Symbol};
 use std::path::Path;
 use thiserror::Error;
 
@@ -40,6 +42,17 @@ fn main() {
 	if !Path::new(ASSET_DIR).is_dir() {
 		panic!("Failed to find resource directory!");
 	}
+
+	let lib = unsafe {
+		Library::new(Path::new("target/debug/libgame.so")).expect("Failed to load libgame!")
+	};
+
+	let game_lib = unsafe {
+		lib.get::<Symbol<CreateGamelibApi>>(b"_goldfish_create_game_lib")
+			.expect("No gamelib constructor found!")()
+	};
+
+	(game_lib.on_load)();
 
 	match asset::import_assets(Path::new(ASSET_DIR)) {
 		Err(err) => panic!("Failed to import assets: {}", err),
