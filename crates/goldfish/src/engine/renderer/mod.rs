@@ -6,16 +6,12 @@ use uuid::uuid;
 use super::package::{AssetType, Package};
 use super::GoldfishEngine;
 use crate::types::Color;
-use backends::vulkan::{
-	VulkanBuffer, VulkanDescriptorHeap, VulkanDescriptorSetHandle, VulkanDescriptorSetLayout,
-	VulkanDevice, VulkanFramebuffer, VulkanGraphicsContext, VulkanOutputPipelineHandle,
-	VulkanPipeline, VulkanPipelineHandle, VulkanRenderPass, VulkanShader, VulkanTexture,
-	VulkanUploadContext,
-};
+use backends::vulkan::*;
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use tracy_client as tracy;
 pub mod backends;
+pub mod render_graph;
 
 pub const VS_MAIN: &'static str = "vs_main";
 pub const PS_MAIN: &'static str = "ps_main";
@@ -32,9 +28,10 @@ pub type RenderPass = VulkanRenderPass;
 pub type Shader = VulkanShader;
 pub type Texture = VulkanTexture;
 pub type Framebuffer = VulkanFramebuffer;
-pub type DescriptorSetLayout = VulkanDescriptorSetLayout;
 pub type DescriptorHeap = VulkanDescriptorHeap;
-pub type DescriptorSet = VulkanDescriptorSetHandle;
+pub type DescriptorLayoutCache = VulkanDescriptorLayoutCache;
+pub type DescriptorHandle = VulkanDescriptorHandle;
+pub type DescriptorLayout = VulkanDescriptorLayout;
 
 pub struct FrameId(u32);
 
@@ -121,16 +118,25 @@ pub struct AttachmentDescription {
 	pub store_op: StoreOp,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorBindingType {
 	UniformBuffer,
 	Sampler,
 	SampledImage,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct DescriptorSetInfo {
-	pub bindings: HashMap<u32, DescriptorBindingType>,
+	pub bindings: im::hashmap::HashMap<u32, DescriptorBindingType>,
+}
+
+impl DescriptorSetInfo {
+	pub fn merge(self, other: DescriptorSetInfo) -> Self {
+		let bindings = im::hashmap::HashMap::from_iter(
+			self.bindings.into_iter().chain(other.bindings.into_iter()),
+		);
+		Self { bindings }
+	}
 }
 
 use crate::types::{Vec2Serde, Vec3Serde};
@@ -202,10 +208,10 @@ impl GraphicsContext {
 	}
 }
 
-pub enum DescriptorSetBinding<'a> {
-	Image(&'a Texture),
-	Buffer(&'a GpuBuffer),
-}
+// pub enum DescriptorSetBinding<'a> {
+// 	Image(&'a Texture),
+// 	Buffer(&'a GpuBuffer),
+// }
 
 pub struct Renderer {
 	pub graphics_device: GraphicsDevice,
@@ -220,110 +226,54 @@ pub struct Renderer {
 	// camera_descriptor: DescriptorSet,
 }
 
-impl Renderer {
-	pub fn new(window: &Window, engine: &GoldfishEngine) -> Self {
-		let (graphics_device, mut graphics_context) = GraphicsDevice::new_with_context(&window);
+// impl Renderer {
+// 	pub fn new(window: &Window, engine: &GoldfishEngine) -> Self {
+// 		// let Package::Shader(shader_package) = engine.read_package(
+// 		// 	uuid!("bedc27e1-f561-4c8d-bb96-6b11926b4ec8"),
+// 		// 	AssetType::Shader,
+// 		// ).expect("Failed to load shader package!") else
+// 		// {
+// 		//           panic!("Incorrect package type loaded?");
+// 		// };
 
-		let upload_context = graphics_device.create_upload_context();
+// 		// let vertex_shader =
+// 		// 	graphics_device.create_shader(&shader_package.vs_ir.expect("No vertex shader!"));
 
-		// let Package::Shader(shader_package) = engine.read_package(
-		// 	uuid!("bedc27e1-f561-4c8d-bb96-6b11926b4ec8"),
-		// 	AssetType::Shader,
-		// ).expect("Failed to load shader package!") else
-		// {
-		//           panic!("Incorrect package type loaded?");
-		// };
+// 		// let pixel_shader =
+// 		// 	graphics_device.create_shader(&shader_package.ps_ir.expect("No vertex shader!"));
 
-		// let Package::Mesh(mesh_package) = engine.read_package(
-		// 		uuid!("471cb8ab-2bd0-4e91-9ea9-0d0573cb9e0a"),
-		// 		AssetType::Mesh,
-		//       ).expect("Failed to load mesh package!") else
-		//       {
-		//           panic!("Incorrect package type loaded?");
-		//       };
+// 		// let render_pass = graphics_device.create_render_pass(
+// 		// 	&[AttachmentDescription {
+// 		// 		format: TextureFormat::RGBA8,
+// 		// 		usage: TextureUsage::ATTACHMENT,
+// 		// 		load_op: LoadOp::Clear,
+// 		// 		store_op: StoreOp::Store,
+// 		// 	}],
+// 		// 	None,
+// 		// );
 
-		// let cube = upload_context.create_mesh(&mesh_package.vertices, &mesh_package.indices);
+// 		// let pipeline_handle =
+// 		// 	graphics_context.create_raster_pipeline(&vertex_shader, &pixel_shader, true, true, 0);
 
-		// let vertex_shader =
-		// 	graphics_device.create_shader(&shader_package.vs_ir.expect("No vertex shader!"));
+// 		// let descriptor_layout = graphics_context
+// 		// 	.get_raster_pipeline(pipeline_handle)
+// 		// 	.unwrap()
+// 		// 	.get_descriptor_layout(0);
 
-		// let pixel_shader =
-		// 	graphics_device.create_shader(&shader_package.ps_ir.expect("No vertex shader!"));
+// 		// let mut descriptor_heap = graphics_device.create_descriptor_heap(descriptor_layout);
+// 		// let camera_descriptor = descriptor_heap.alloc().unwrap();
 
-		// let render_pass = graphics_device.create_render_pass(
-		// 	&[AttachmentDescription {
-		// 		format: TextureFormat::RGBA8,
-		// 		usage: TextureUsage::ATTACHMENT,
-		// 		load_op: LoadOp::Clear,
-		// 		store_op: StoreOp::Store,
-		// 	}],
-		// 	None,
-		// );
-
-		// let pipeline_handle =
-		// 	graphics_context.create_raster_pipeline(&vertex_shader, &pixel_shader, true, true, 0);
-
-		// let descriptor_layout = graphics_context
-		// 	.get_raster_pipeline(pipeline_handle)
-		// 	.unwrap()
-		// 	.get_descriptor_layout(0);
-
-		// let mut descriptor_heap = graphics_device.create_descriptor_heap(descriptor_layout);
-		// let camera_descriptor = descriptor_heap.alloc().unwrap();
-
-		Self {
-			graphics_device,
-			graphics_context,
-			upload_context,
-			// vertex_shader,
-			// pixel_shader,
-			// render_pass,
-			// pipeline_handle,
-			// cube,
-			// descriptor_heap,
-			// camera_descriptor,
-		}
-	}
-
-	pub fn update(&mut self, window: &Window) {
-		if let Ok(_) = self.graphics_context.begin_frame(window) {
-			self.graphics_context.bind_output_framebuffer(Color {
-				r: 1.0,
-				g: 1.0,
-				b: 1.0,
-				a: 1.0,
-			});
-
-			// {
-			// 	let pipeline = self
-			// 		.graphics_context
-			// 		.get_raster_pipeline(self.pipeline_handle)
-			// 		.unwrap();
-			// 	self.graphics_context.bind_raster_pipeline(pipeline);
-			// }
-
-			// self.graphics_context.draw_mesh(&self.cube);
-
-			self.graphics_context.unbind_output_framebuffer();
-			self.graphics_context.end_frame(window);
-		}
-	}
-
-	pub fn destroy(mut self) {
-		// self.graphics_device
-		// 	.destroy_descriptor_heap(self.descriptor_heap);
-
-		// self.graphics_device.destroy_mesh(self.cube);
-		// self.graphics_device.destroy_render_pass(self.render_pass);
-		// self.graphics_device.destroy_shader(self.vertex_shader);
-		// self.graphics_device.destroy_shader(self.pixel_shader);
-		// self.graphics_context
-		// 	.destroy_raster_pipeline(self.pipeline_handle);
-
-		self.graphics_device
-			.destroy_upload_context(self.upload_context);
-
-		self.graphics_context.destroy();
-		self.graphics_device.destroy();
-	}
-}
+// 		Self {
+// 			graphics_device,
+// 			graphics_context,
+// 			upload_context,
+// 			// vertex_shader,
+// 			// pixel_shader,
+// 			// render_pass,
+// 			// pipeline_handle,
+// 			// cube,
+// 			// descriptor_heap,
+// 			// camera_descriptor,
+// 		}
+// 	}
+// }

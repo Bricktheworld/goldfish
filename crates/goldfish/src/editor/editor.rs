@@ -52,16 +52,18 @@ fn main() {
 			.expect("No gamelib constructor found!")()
 	};
 
-	(game_lib.on_load)();
-
 	match asset::import_assets(Path::new(ASSET_DIR)) {
 		Err(err) => panic!("Failed to import assets: {}", err),
 		_ => (),
 	}
 
-	let engine = GoldfishEngine::new("Goldfish Editor", read_asset);
+	let mut engine = GoldfishEngine::new("Goldfish Editor", read_asset);
 
-	engine.run(move |_, _| {
-		// println!("Editor update!");
+	(game_lib.on_load)(&mut engine);
+
+	engine.run(|engine, _| {
+		(game_lib.on_update)(engine);
 	});
+
+	(game_lib.on_unload)(&mut engine);
 }

@@ -109,11 +109,17 @@ impl VulkanUploadContext {
 impl VulkanDevice {
 	pub fn create_empty_buffer(
 		&self,
-		size: usize,
+		mut size: usize,
 		location: MemoryLocation,
 		usage: BufferUsage,
 		alignment: Option<u64>,
 	) -> VulkanBuffer {
+		if usage.contains(BufferUsage::UniformBuffer)
+			|| usage.contains(BufferUsage::UniformTexelBuffer)
+		{
+			size = self.pad_size(size as u64) as usize;
+		}
+
 		let raw = unsafe {
 			self.raw
 				.create_buffer(
@@ -156,6 +162,22 @@ impl VulkanDevice {
 			usage,
 			size,
 		}
+	}
+
+	pub fn update_buffer(&self, buffer: &mut VulkanBuffer, data: &[u8]) {
+		if buffer.location != MemoryLocation::CpuToGpu {
+			panic!("Cannot update buffer that is not CpuToGpu!");
+		}
+
+		if data.len() > buffer.size {
+			panic!("Cannot update buffer with data that is too long!");
+		}
+
+		buffer
+			.allocation
+			.mapped_slice_mut()
+			.expect("Failed to map allocation!")[0..data.len()]
+			.copy_from_slice(data);
 	}
 
 	pub fn destroy_buffer(&mut self, buffer: VulkanBuffer) {

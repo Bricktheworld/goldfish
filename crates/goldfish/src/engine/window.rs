@@ -1,14 +1,16 @@
 use crate::types::Size;
+use glam::DVec2;
 use raw_window_handle::HasRawDisplayHandle;
 use std::time::{Duration, Instant};
 use winit::{
 	event::{Event, WindowEvent},
 	event_loop::{ControlFlow, EventLoop},
+	platform::run_return::EventLoopExtRunReturn,
 };
 
 pub struct Window {
-	name: &'static str,
-	winit_window: winit::window::Window,
+	pub name: &'static str,
+	pub winit_window: winit::window::Window,
 	event_loop: Option<EventLoop<()>>,
 }
 
@@ -42,29 +44,22 @@ impl Window {
 		}
 	}
 
-	pub fn get_winit(&self) -> &winit::window::Window {
-		&self.winit_window
-	}
-
-	pub fn get_name(&self) -> &'static str {
-		self.name
-	}
-
 	pub fn get_run_context(&mut self) -> WindowRunContext {
 		self.event_loop
 			.take()
 			.expect("Cannot get call get_run_context more than once!")
 	}
 
-	pub fn run<F>(context: WindowRunContext, mut update_fn: F)
+	pub fn run<F>(mut context: WindowRunContext, mut update_fn: F)
 	where
-		F: FnMut(Duration, Option<Size>) -> () + 'static,
+		F: FnMut(Duration, &[bool; 255], DVec2, Option<Size>) -> (),
 	{
-		let event_loop = context;
-
 		let mut last_time = Instant::now();
 		let mut new_size: Option<Size> = None;
-		event_loop.run(move |event, _, control_flow| {
+		let mut keys = [false; 255];
+		let mut mouse_delta = Default::default();
+
+		context.run_return(|event, _, control_flow| {
 			*control_flow = ControlFlow::Poll;
 
 			match event {
@@ -81,13 +76,37 @@ impl Window {
 						height: size.height,
 					})
 				}
+				Event::WindowEvent {
+					event:
+						WindowEvent::KeyboardInput {
+							input:
+								winit::event::KeyboardInput {
+									virtual_keycode: Some(keycode),
+									state,
+									scancode,
+									..
+								},
+							..
+						},
+					..
+				} => {
+					keys[keycode as usize] = match state {
+						winit::event::ElementState::Pressed => true,
+						winit::event::ElementState::Released => false,
+					}
+				}
+				Event::DeviceEvent {
+					event: winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) },
+					..
+				} => mouse_delta = DVec2 { x: dx, y: dy },
 				Event::MainEventsCleared => {
 					let now = Instant::now();
 					let dt = now - last_time;
 					last_time = now;
 
-					update_fn(dt, new_size);
+					update_fn(dt, &keys, mouse_delta, new_size);
 					new_size = None;
+					mouse_delta = Default::default();
 				}
 				_ => (),
 			}

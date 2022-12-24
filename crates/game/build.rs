@@ -4,6 +4,10 @@
 use hassle_rs::{Dxc, DxcIncludeHandler, HassleError};
 
 use byteorder::{NativeEndian, WriteBytesExt};
+use spirv_cross::{
+	hlsl, spirv,
+	spirv::{Decoration, Type},
+};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -12,6 +16,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 enum BuildError {
+	#[error("A shader reflection error occurred {0}: {1}")]
+	ShaderReflection(PathBuf, spirv_cross::ErrorCode),
 	#[error("A shader compilation error occurred compiling {0}: {1}")]
 	ShaderCompilation(PathBuf, HassleError),
 	#[error("An unknown filesystem error occurred: {0}")]
@@ -54,232 +60,17 @@ impl<'a> DxcIncludeHandler for ShaderIncludeHandler<'a> {
 	}
 }
 
-fn generate_material(
-	src: &str,
-	descriptor_sets: &[spirv_reflect::types::ReflectDescriptorSet],
-	descriptor_map: Option<&HashMap<String, Vec<u32>>>,
-) -> String {
-	let mut descriptor_decls: Vec<String> = Default::default();
-	let mut descriptor_impls: Vec<String> = Default::default();
-	let mut uniform_decls: Vec<String> = Default::default();
-	let mut uniform_impls: Vec<String> = Default::default();
-
-	let included_descriptors = if let Some(descriptor_map) = descriptor_map {
-		descriptor_map
-			.iter()
-			.flat_map(|(inc, descriptors)| -> Vec<(u32, String)> {
-				if src.contains(&format!("#include \"{}.hlsli\"", inc)) {
-					descriptors
-						.iter()
-						.map(|set| (*set, format!("super::{}_inc::Descriptor{}", inc, set)))
-						.collect::<_>()
-				} else {
-					Default::default()
-				}
-			})
-			.collect::<HashMap<_, _>>()
-	} else {
-		Default::default()
-	};
-
-	let get_member_type =
-		|type_description: &spirv_reflect::types::ReflectTypeDescription| -> &'static str {
-			let member_type = type_description.type_flags;
-			if member_type == spirv_reflect::types::ReflectTypeFlags::FLOAT {
-				"f32"
-			} else if member_type
-				== spirv_reflect::types::ReflectTypeFlags::VECTOR
-					| spirv_reflect::types::ReflectTypeFlags::FLOAT
-			{
-				match type_description.traits.numeric.vector.component_count {
-					2 => "glam::Vec2",
-					3 => "glam::Vec3",
-					4 => "glam::Vec4",
-					_ => unimplemented!(
-						"{:?} component_count: {}",
-						member_type,
-						type_description.traits.numeric.vector.component_count
-					),
-				}
-			} else if member_type
-				== spirv_reflect::types::ReflectTypeFlags::MATRIX
-					| spirv_reflect::types::ReflectTypeFlags::VECTOR
-					| spirv_reflect::types::ReflectTypeFlags::FLOAT
-			{
-				if type_description.traits.numeric.matrix.column_count
-					!= type_description.traits.numeric.matrix.row_count
-				{
-					unimplemented!(
-						"Non-matching matrix row and col count {} {}",
-						type_description.traits.numeric.matrix.column_count,
-						type_description.traits.numeric.matrix.row_count
-					)
-				} else {
-					match type_description.traits.numeric.matrix.row_count {
-						2 => "glam::Mat2",
-						3 => "glam::Mat3",
-						4 => "glam::Mat4",
-						_ => unimplemented!(
-							"{:?} row_count: {}",
-							member_type,
-							type_description.traits.numeric.matrix.row_count
-						),
-					}
-				}
-			} else {
-				unimplemented!("{:?}", member_type);
-			}
-		};
-
-	let mut gen_uniform_struct =
-		|type_desc: &spirv_reflect::types::ReflectTypeDescription| -> String {
-			let index = type_desc.type_name.rfind(".").unwrap() + 1;
-
-			let uniform_name = format!("{}", &type_desc.type_name[index..]);
-			let u_decl = format!(
-				"\n#[derive(Clone, Copy, PartialEq, Default)]\npub struct {} {{\n{}}}",
-				uniform_name,
-				type_desc
-					.members
-					.iter()
-					.map(|member| -> String {
-						let member_type = get_member_type(member);
-
-						format!("\tpub {}: {},\n", &member.struct_member_name, member_type)
-					})
-					.collect::<String>()
-			);
-
-			let u_impl = format!(
-				"\nimpl goldfish::build::UniformBuffer for {} {{\n}}",
-				uniform_name
-			);
-
-			uniform_decls.push(u_decl);
-			uniform_impls.push(u_impl);
-			uniform_name
-		};
-
-	let mut gen_bindings = |bindings: &[spirv_reflect::types::ReflectDescriptorBinding]| -> String {
-		bindings
-			.iter()
-			.map(|binding| -> String {
-				format!(
-					"\tpub {}: {},\n",
-					&binding.name,
-					&match binding.descriptor_type {
-						spirv_reflect::types::ReflectDescriptorType::Sampler =>
-							"Sampler".to_owned(),
-						spirv_reflect::types::ReflectDescriptorType::SampledImage =>
-							"SampledImage".to_owned(),
-						spirv_reflect::types::ReflectDescriptorType::UniformBuffer => {
-							let uniform_name =
-								gen_uniform_struct(&binding.type_description.as_ref().unwrap());
-
-							uniform_name
-						}
-						_ => unimplemented!("{:?}", binding.descriptor_type),
-					}
-				)
-			})
-			.collect::<String>()
-	};
-
-	let gen_descriptor_info = |set: &spirv_reflect::types::ReflectDescriptorSet| -> String {
-		set.bindings
-			.iter()
-			.map(|binding| {
-				format!(
-					"({}, {}),\n",
-					binding.binding,
-					match binding.descriptor_type {
-						spirv_reflect::types::ReflectDescriptorType::Sampler =>
-							"goldfish::renderer::DescriptorBindingType::Sampler",
-						spirv_reflect::types::ReflectDescriptorType::SampledImage =>
-							"goldfish::renderer::DescriptorBindingType::SampledImage",
-						spirv_reflect::types::ReflectDescriptorType::UniformBuffer =>
-							"goldfish::renderer::DescriptorBindingType::UniformBuffer",
-						_ => unimplemented!("{:?}", binding.descriptor_type),
-					}
-				)
-			})
-			.collect::<_>()
-	};
-
-	let mut gen_descriptor = |set: &spirv_reflect::types::ReflectDescriptorSet| -> String {
-		let set_name = format!("Descriptor{}", &set.set.to_string());
-
-		if let Some(descriptor_type) = included_descriptors.get(&set.set) {
-			descriptor_decls.push(format!(
-				"pub type Descriptor{} = {};",
-				set.set, descriptor_type
-			));
-		} else {
-			let generated = gen_bindings(&set.bindings);
-			let declaration = format!(
-				"\n#[derive(Clone, Copy, PartialEq, Default)]\npub struct {} {{\n{}}}",
-				&set_name, &generated
-			);
-
-			let implementation = format!(
-				"
-impl goldfish::build::DescriptorInfo for {} {{
-    fn get() -> goldfish::renderer::DescriptorSetInfo {{
-        goldfish::renderer::DescriptorSetInfo {{
-            bindings: std::collections::HashMap::from([
-                {}
-            ]),
-        }}
-    }}
-}}",
-				set_name,
-				gen_descriptor_info(&set),
-			);
-			descriptor_decls.push(declaration);
-			descriptor_impls.push(implementation);
-		}
-		set_name
-	};
-
-	let set_count = descriptor_sets
-		.iter()
-		.map(|set| set.set + 1)
-		.max()
-		.unwrap_or(0u32);
-
-	let material_declaration = format!(
-		"\n#[derive(Clone, Copy, PartialEq, Default)]\npub struct Material({});",
-		(0..set_count)
-			.map(|set| -> String {
-				let Some(set) = descriptor_sets.iter().find(|i| i.set == set) else {
-					return "std::marker::PhantomData<()>".to_owned();
-				};
-
-				"pub ".to_owned() + &gen_descriptor(set)
-			})
-			.collect::<String>()
-	);
-
-	format!(
-		"\n{}\n{}\n{}\n{}\n{}\n",
-		uniform_decls.join(""),
-		descriptor_decls.join(""),
-		if descriptor_map.is_some() {
-			&material_declaration
-		} else {
-			""
-		},
-		uniform_impls.join(""),
-		descriptor_impls.join(""),
-	)
+struct CompiledShaders {
+	vs: Option<Vec<u32>>,
+	ps: Option<Vec<u32>>,
+	cs: Option<Vec<u32>>,
 }
 
 fn compile_hlsl(
 	path: &Path,
 	src: &str,
 	disable_optimizations: bool,
-	descriptor_map: Option<&HashMap<String, Vec<u32>>>,
-) -> Result<(String, Vec<u32>), BuildError> {
+) -> Result<(Vec<spirv::Ast<hlsl::Target>>, CompiledShaders), BuildError> {
 	let dxc = Dxc::new(None)
 		.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
 
@@ -338,9 +129,7 @@ fn compile_hlsl(
 		}
 	};
 
-	let shader_module_name = path.file_stem().unwrap().to_str().unwrap().to_owned()
-		+ if descriptor_map.is_some() { "" } else { "_inc" };
-	let mut descriptor_sets: Vec<spirv_reflect::types::ReflectDescriptorSet> = Default::default();
+	let mut asts: Vec<spirv::Ast<hlsl::Target>> = Default::default();
 
 	let spirv_default = ["-spirv"];
 	let spirv_no_optimize = ["-spirv", "-Od"];
@@ -351,50 +140,211 @@ fn compile_hlsl(
 		&spirv_default
 	};
 
-	if src.contains(VS_MAIN) {
+	let vs = if src.contains(VS_MAIN) {
 		let vs_ir = compile(VS_MAIN, "vs_6_0", config, &[])?;
 
-		let bytes = vs_ir
-			.iter()
-			.flat_map(|code| code.to_ne_bytes())
-			.collect::<Vec<_>>();
+		let module = spirv::Module::from_words(&vs_ir);
+		let ast = spirv::Ast::<hlsl::Target>::parse(&module)
+			.map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
+		asts.push(ast);
+		Some(vs_ir)
+	} else {
+		None
+	};
 
-		let module = spirv_reflect::ShaderModule::load_u8_data(&bytes).unwrap();
-		descriptor_sets.append(&mut module.enumerate_descriptor_sets(None).unwrap());
-	}
-
-	if src.contains(PS_MAIN) {
+	let ps = if src.contains(PS_MAIN) {
 		let ps_ir = compile(PS_MAIN, "ps_6_0", config, &[])?;
 
-		let bytes = ps_ir
-			.iter()
-			.flat_map(|code| code.to_ne_bytes())
-			.collect::<Vec<_>>();
+		let module = spirv::Module::from_words(&ps_ir);
+		let ast = spirv::Ast::<hlsl::Target>::parse(&module)
+			.map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
+		asts.push(ast);
+		Some(ps_ir)
+	} else {
+		None
+	};
 
-		let module = spirv_reflect::ShaderModule::load_u8_data(&bytes).unwrap();
-		descriptor_sets.append(&mut module.enumerate_descriptor_sets(None).unwrap());
-	}
-	descriptor_sets.dedup();
-
-	let material = generate_material(src, &descriptor_sets, descriptor_map);
-
-	Ok((
-		format!("pub mod {} {{\n{}\n}}", &shader_module_name, material),
-		descriptor_sets.iter().map(|set| set.set).collect::<_>(),
-	))
+	Ok((asts, CompiledShaders { vs, ps, cs: None }))
 }
 
-fn parse_shader_includes(
-	asset_dir: &Path,
-) -> Result<(String, HashMap<String, Vec<u32>>), BuildError> {
-	let mut generated = String::default();
-	let mut descriptor_map: HashMap<String, Vec<u32>> = Default::default();
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum MemberType {
+	F32,
+	Vec2,
+	Vec3,
+	Vec4,
+	Mat3,
+	Mat4,
+}
+impl From<Type> for MemberType {
+	fn from(ty: Type) -> Self {
+		match ty {
+			Type::Float {
+				vecsize: 1,
+				columns: 0,
+				..
+			} => MemberType::F32,
+			Type::Float {
+				vecsize: 2,
+				columns: 1,
+				..
+			} => MemberType::Vec2,
+			Type::Float {
+				vecsize: 3,
+				columns: 1,
+				..
+			} => MemberType::Vec3,
+			Type::Float {
+				vecsize: 4,
+				columns: 1,
+				..
+			} => MemberType::Vec4,
+			Type::Float {
+				vecsize: 3,
+				columns: 3,
+				..
+			} => MemberType::Mat3,
+			Type::Float {
+				vecsize: 4,
+				columns: 4,
+				..
+			} => MemberType::Mat4,
+			_ => unimplemented!("Unimplemented type {:?}", ty),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct StructMember {
+	name: String,
+	ty: MemberType,
+	offset: u32,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct Struct {
+	ty_name: String,
+	members: Vec<StructMember>,
+	size: u32,
+}
+
+#[derive(Debug)]
+enum DescriptorBinding {
+	UniformBuffer { name: String, struct_info: Struct },
+	Sampler { name: String },
+	SampledImage { name: String },
+}
+
+type DescriptorBindings = HashMap<u32, DescriptorBinding>;
+type DescriptorSets = HashMap<u32, DescriptorBindings>;
+
+fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets {
+	let mut descriptors: DescriptorSets = Default::default();
+	for ast in asts {
+		let resources = ast.get_shader_resources().unwrap();
+		for resource in resources.uniform_buffers {
+			let ty_name = ast.get_name(resource.base_type_id).unwrap();
+			let name = ast.get_name(resource.id).unwrap();
+
+			let ty_name = if let Some(last) = ty_name.rfind(".") {
+				ty_name[last + 1..].to_owned()
+			} else {
+				ty_name
+			};
+
+			let resource_type = ast.get_type(resource.base_type_id).unwrap();
+			let size = ast.get_declared_struct_size(resource.base_type_id).unwrap();
+
+			let Type::Struct { member_types, .. } = resource_type else {
+                unimplemented!(
+                    "Uniform buffers must be a struct! {:?}",
+                    resource_type
+                );
+            };
+
+			let members = member_types
+				.iter()
+				.enumerate()
+				.map(|(i, id)| StructMember {
+					name: ast
+						.get_member_name(resource.base_type_id, i as u32)
+						.unwrap(),
+					ty: ast.get_type(*id).unwrap().into(),
+					offset: ast
+						.get_member_decoration(resource.base_type_id, i as u32, Decoration::Offset)
+						.unwrap(),
+				})
+				.collect::<Vec<_>>();
+
+			let set = ast
+				.get_decoration(resource.id, Decoration::DescriptorSet)
+				.unwrap();
+
+			let binding = ast
+				.get_decoration(resource.id, Decoration::Binding)
+				.unwrap();
+
+			descriptors
+				.entry(set)
+				.or_default()
+				.entry(binding)
+				.or_insert(DescriptorBinding::UniformBuffer {
+					name,
+					struct_info: Struct {
+						ty_name,
+						members,
+						size,
+					},
+				});
+		}
+
+		for resource in resources.separate_samplers {
+			let name = resource.name;
+
+			let set = ast
+				.get_decoration(resource.id, Decoration::DescriptorSet)
+				.unwrap();
+
+			let binding = ast
+				.get_decoration(resource.id, Decoration::Binding)
+				.unwrap();
+
+			descriptors
+				.entry(set)
+				.or_default()
+				.entry(binding)
+				.or_insert(DescriptorBinding::Sampler { name });
+		}
+
+		for resource in resources.separate_images {
+			let name = resource.name;
+
+			let set = ast
+				.get_decoration(resource.id, Decoration::DescriptorSet)
+				.unwrap();
+
+			let binding = ast
+				.get_decoration(resource.id, Decoration::Binding)
+				.unwrap();
+
+			descriptors
+				.entry(set)
+				.or_default()
+				.entry(binding)
+				.or_insert(DescriptorBinding::SampledImage { name });
+		}
+	}
+	return descriptors;
+}
+
+fn parse_shader_includes(asset_dir: &Path) -> Result<HashMap<String, DescriptorSets>, BuildError> {
+	let mut descriptor_layouts: HashMap<String, DescriptorSets> = Default::default();
+
 	for asset in fs::read_dir(asset_dir).map_err(move |err| BuildError::Filesystem(err))? {
 		let asset = asset.map_err(move |err| BuildError::Filesystem(err))?;
 		let asset_path = asset.path();
 
 		if asset_path.is_dir() {
-			// parse_shader_includes(&asset_path)?;
 			unimplemented!("Cannot handle nested directories for shaders");
 		} else if let Some(extension) = asset_path.extension() {
 			if extension != SHADER_INC {
@@ -427,22 +377,107 @@ __VS_OUTPUT__ vs_main(float3 pos : POSITION)
     return result;
 }
 ";
-				let (gen, descriptors) = compile_hlsl(&asset_path, &src, true, None)?;
-				generated += &gen;
+				let (mut asts, _) = compile_hlsl(&asset_path, &src, true)?;
+				let descriptors = generate_descriptors(&mut asts);
 
-				descriptor_map.insert(
+				descriptor_layouts.insert(
 					asset_path.file_stem().unwrap().to_str().unwrap().to_owned(),
 					descriptors,
 				);
 			}
 		}
 	}
-	Ok((generated, descriptor_map))
+	Ok(descriptor_layouts)
+}
+
+fn generate_descriptor_rust(set: u32, bindings: &DescriptorBindings) -> String {
+	format!(
+		"
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct Descriptor{0} {{
+{1}
+}}
+",
+		set,
+		bindings
+			.iter()
+			.map(|(_, info)| format!(
+				"pub {}: {},\n",
+				match info {
+					DescriptorBinding::UniformBuffer { name, .. } => name,
+					_ => unimplemented!(),
+				},
+				match info {
+					DescriptorBinding::UniformBuffer {
+						struct_info: Struct { ty_name, .. },
+						..
+					} => ty_name,
+					_ => unimplemented!(),
+				},
+			))
+			.collect::<String>(),
+	)
+}
+
+fn generate_struct_rust(struct_info: &Struct) -> String {
+	format!(
+		"
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct {0} {{
+{1}
+}}
+
+unsafe impl bytemuck::Pod for {0} {{}}
+unsafe impl bytemuck::Zeroable for {0} {{}}
+
+impl goldfish::build::UniformBuffer<{2}> for {0} {{
+    fn size() -> usize {{
+        {2}
+    }}
+
+	fn as_buffer(&self) -> [u8; {2}] {{
+        let mut output: [u8; {2}] = [0; {2}];
+        {3}
+        output
+    }}
+}}
+",
+		struct_info.ty_name,
+		struct_info
+			.members
+			.iter()
+			.map(|member| format!(
+				"pub {}: {},\n",
+				member.name,
+				match member.ty {
+					MemberType::F32 => "f32",
+					MemberType::Vec2 => "glam::Vec2",
+					MemberType::Vec3 => "glam::Vec3",
+					MemberType::Vec4 => "glam::Vec4",
+					MemberType::Mat3 => "glam::Mat3",
+					MemberType::Mat4 => "glam::Mat4",
+				}
+			))
+			.collect::<String>(),
+		struct_info.size,
+		struct_info
+			.members
+			.iter()
+			.map(|member| format!(
+				"
+let slice = bytemuck::cast_slice::<_, u8>(self.{0}.as_ref());
+output[{1}..{1} + slice.len()].clone_from_slice(slice);
+",
+				member.name, member.offset,
+			))
+			.collect::<String>(),
+	)
 }
 
 fn compile_shaders(
+	out_dir: &Path,
 	asset_dir: &Path,
-	descriptor_map: &HashMap<String, Vec<u32>>,
+	descriptor_layouts: &HashMap<String, DescriptorSets>,
 ) -> Result<String, BuildError> {
 	let mut generated = String::default();
 	for asset in fs::read_dir(asset_dir).map_err(move |err| BuildError::Filesystem(err))? {
@@ -450,7 +485,6 @@ fn compile_shaders(
 		let asset_path = asset.path();
 
 		if asset_path.is_dir() {
-			// compile_shaders(&asset_path)?;
 			unimplemented!("Cannot handle nested directories for shaders");
 		} else if let Some(extension) = asset_path.extension() {
 			if extension != SHADER_EXT {
@@ -461,10 +495,110 @@ fn compile_shaders(
 				"cargo:warning=Compiling {} ...",
 				asset_path.to_str().unwrap()
 			);
+
 			let src =
 				fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
 
-			generated += &compile_hlsl(&asset_path, &src, false, Some(descriptor_map))?.0;
+			let (mut asts, compiled_shaders) = compile_hlsl(&asset_path, &src, false)?;
+
+			let mut shader_ir_consts = String::default();
+			if let Some(ref vs) = compiled_shaders.vs {
+				let bytes = vs
+					.iter()
+					.flat_map(|code| code.to_ne_bytes())
+					.collect::<Vec<_>>();
+
+				let out = out_dir
+					.join(asset_path.file_name().unwrap())
+					.with_extension("vs");
+
+				std::fs::write(&out, bytes).map_err(move |err| BuildError::Filesystem(err))?;
+
+				shader_ir_consts += &format!(
+					"pub const VS_BYTES: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{}\"));\n",
+					out.file_name().unwrap().to_str().unwrap()
+				);
+			}
+
+			if let Some(ref ps) = compiled_shaders.ps {
+				let bytes = ps
+					.iter()
+					.flat_map(|code| code.to_ne_bytes())
+					.collect::<Vec<_>>();
+
+				let out = out_dir
+					.join(asset_path.file_name().unwrap())
+					.with_extension("ps");
+				std::fs::write(&out, bytes).map_err(move |err| BuildError::Filesystem(err))?;
+
+				shader_ir_consts += &format!(
+					"pub const PS_BYTES: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{}\"));\n",
+					out.file_name().unwrap().to_str().unwrap()
+				);
+			}
+
+			let descriptors = generate_descriptors(&mut asts);
+
+			let included_sets = descriptor_layouts
+				.iter()
+				.flat_map(|(include, sets)| {
+					if src.contains(&format!("#include \"{}.hlsli\"", include)) {
+						sets.iter()
+							.map(|(set, _)| {
+								(*set, format!("super::{}_inc::Descriptor{}", include, *set))
+							})
+							.collect::<Vec<(u32, String)>>()
+					} else {
+						Default::default()
+					}
+				})
+				.collect::<HashMap<u32, String>>();
+
+			let mut descriptor_decls: Vec<String> = Default::default();
+			let mut uniform_decls: Vec<Struct> = Default::default();
+
+			for (set, bindings) in descriptors {
+				if let Some(descriptor_type) = included_sets.get(&set) {
+					descriptor_decls.push(format!(
+						"\npub type Descriptor{} = {};\n",
+						set, descriptor_type
+					));
+				} else {
+					uniform_decls.append(
+						&mut bindings
+							.iter()
+							.flat_map(|(_, info)| match info {
+								DescriptorBinding::UniformBuffer { struct_info, .. } => {
+									Some(struct_info.clone())
+								}
+								_ => None,
+							})
+							.collect(),
+					);
+					descriptor_decls.push(generate_descriptor_rust(set, &bindings));
+				}
+			}
+
+			use itertools::Itertools;
+			let uniform_decls = uniform_decls.into_iter().unique().collect::<Vec<_>>();
+
+			generated += &format!(
+				"
+pub mod {} {{
+{}
+{}
+
+{}
+}}
+",
+				asset_path.file_stem().unwrap().to_str().unwrap(),
+				&shader_ir_consts,
+				descriptor_decls.join(""),
+				uniform_decls
+					.iter()
+					.map(|struct_info| generate_struct_rust(struct_info))
+					.collect::<String>(),
+			);
 		}
 	}
 	Ok(generated)
@@ -472,18 +606,61 @@ fn compile_shaders(
 
 fn main() {
 	let out_dir = &env::var_os("OUT_DIR").unwrap();
+	println!(
+		"cargo:warning=Running build script, output dir {}",
+		out_dir.to_str().unwrap()
+	);
 
 	match parse_shader_includes(&Path::new(SHADERS_DIR)) {
 		Err(err) => panic!("Failed to parse shader includes! {}", err),
-		Ok((includes_generated, descriptor_map)) => {
-			println!("cargo:warning=Successfully parsed shader includes!");
+		Ok(descriptor_layouts) => {
+			let uniform_decls = descriptor_layouts
+				.iter()
+				.flat_map(|(_, sets)| {
+					sets.iter().flat_map(|(_, bindings)| {
+						bindings.iter().map(|(_, info)| match info {
+							DescriptorBinding::UniformBuffer { struct_info, .. } => {
+								Some(struct_info)
+							}
+							_ => None,
+						})
+					})
+				})
+				.flatten()
+				.collect::<Vec<&Struct>>();
 
-			match compile_shaders(&Path::new(SHADERS_DIR), &descriptor_map) {
+			let includes_generated = descriptor_layouts
+				.iter()
+				.map(|(module, sets)| {
+					format!(
+						"
+pub mod {}_inc {{
+{}
+{}
+}}",
+						module,
+						sets.iter()
+							.map(|(set, bindings)| generate_descriptor_rust(*set, bindings))
+							.collect::<String>(),
+						uniform_decls
+							.iter()
+							.map(|struct_info| generate_struct_rust(struct_info))
+							.collect::<String>(),
+					)
+				})
+				.collect::<String>();
+
+			match compile_shaders(
+				Path::new(&out_dir),
+				Path::new(SHADERS_DIR),
+				&descriptor_layouts,
+			) {
 				Err(err) => panic!("Failed to compile shaders! {}", err),
 				Ok(generated) => {
 					println!("cargo:warning=Successfully compiled shaders!");
+
 					let dst_path = Path::new(&out_dir).join("materials.rs");
-					std::fs::write(&dst_path, includes_generated + &generated)
+					std::fs::write(&dst_path, &(includes_generated + &generated))
 						.expect("Failed to write generated materials!");
 				}
 			}

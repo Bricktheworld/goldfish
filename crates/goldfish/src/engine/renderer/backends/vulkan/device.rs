@@ -12,7 +12,8 @@ use ash::{
 	vk, Entry,
 };
 use gpu_allocator::vulkan as vma;
-use std::collections::HashSet;
+use std::any::TypeId;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::{Arc, Mutex};
@@ -71,6 +72,7 @@ pub struct VulkanDevice {
 	pub scratch_fence: Option<VulkanFence>,
 
 	pub frame: Arc<Mutex<VulkanPerFrameData>>,
+	pub descriptor_layouts: Arc<Mutex<HashMap<TypeId, vk::DescriptorSetLayout>>>,
 }
 
 pub struct SwapchainDetails {
@@ -130,9 +132,10 @@ impl VulkanDevice {
 		unsafe {
 			let entry = Entry::linked();
 
-			let mut extension_names = ash_window::enumerate_required_extensions(window.get_winit())
-				.expect("Failed to get required extensions!")
-				.to_vec();
+			let mut extension_names =
+				ash_window::enumerate_required_extensions(&window.winit_window)
+					.expect("Failed to get required extensions!")
+					.to_vec();
 			extension_names.push(DebugUtils::name().as_ptr());
 
 			let layer_names = [CStr::from_bytes_with_nul_unchecked(
@@ -144,7 +147,7 @@ impl VulkanDevice {
 				.map(|raw_name| raw_name.as_ptr())
 				.collect();
 
-			let app_name = CStr::from_bytes_with_nul_unchecked(window.get_name().as_bytes());
+			let app_name = CStr::from_bytes_with_nul_unchecked(window.name.as_bytes());
 			let app_info = vk::ApplicationInfo::builder()
 				.application_name(app_name)
 				.application_version(0)
@@ -181,7 +184,7 @@ impl VulkanDevice {
 				.create_debug_utils_messenger(&debug_info, None)
 				.expect("Failed to create debug messenger!");
 
-			let surface = ash_window::create_surface(&entry, &instance, window.get_winit(), None)
+			let surface = ash_window::create_surface(&entry, &instance, &window.winit_window, None)
 				.expect("Failed to create surface!");
 
 			let surface_loader = Surface::new(&entry, &instance);
@@ -230,7 +233,7 @@ impl VulkanDevice {
 					find_queue_families(dev),
 					Self::query_swapchain_support_physical_device(&surface_loader, surface, dev),
 				) {
-					(Some(_), Some(swapchain_details)) => {
+					(Some(_), Some(_swapchain_details)) => {
 						// TODO(Brandon): Add check for device extension support.
 						let mut score = 0;
 
@@ -380,12 +383,26 @@ impl VulkanDevice {
 					destructors: Default::default(),
 					frame: 0,
 				})),
+				descriptor_layouts: Default::default(),
 			}
 		}
 	}
 
+	// pub fn setup_descriptor_layouts(&self, descriptor_layouts: &HashMap<TypeId, DescriptorInfo>) {}
+
 	pub fn wait_idle(&self) {
 		unsafe { self.raw.device_wait_idle().expect("Wait idle failed!") };
+	}
+
+	pub fn pad_size(&self, size: u64) -> u64 {
+		let alignment = self
+			.physical_device_properties
+			.limits
+			.min_uniform_buffer_offset_alignment;
+		if alignment <= 0 {
+			return size;
+		}
+		return (size + alignment - 1) & !(alignment - 1);
 	}
 
 	pub fn graphics_queue_submit(&self, command_buffer: VulkanCommandBuffer, fence: &VulkanFence) {

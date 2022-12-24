@@ -4,6 +4,12 @@ pub struct Size {
 	pub height: u32,
 }
 
+impl Size {
+	pub fn aspect(&self) -> f64 {
+		self.width as f64 / self.height as f64
+	}
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct Color {
 	pub r: f32,

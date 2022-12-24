@@ -9,11 +9,13 @@ pub mod tracy_gpu;
 pub mod types;
 pub mod window;
 
+pub use glam::*;
 use package::{AssetType, Package, ReadAssetFn};
-use renderer::Renderer;
+use renderer::{GraphicsContext, GraphicsDevice};
 use std::time::Duration;
 use thiserror::Error;
 use tracy_client as tracy;
+pub use types::*;
 use uuid::Uuid;
 use window::Window;
 
@@ -31,10 +33,14 @@ pub type GoldfishResult<T> = Result<T, GoldfishError>;
 extern crate scopeguard;
 
 pub struct GoldfishEngine {
-	window: Window,
+	pub window: Window,
 	package_reader: ReadAssetFn,
-	renderer: Option<Renderer>,
+	pub graphics_device: GraphicsDevice,
+	pub graphics_context: GraphicsContext,
+	pub game_state: *mut (),
 	tracy: tracy::Client,
+	pub keys: [bool; 255],
+	pub mouse_delta: DVec2,
 }
 
 #[global_allocator]
@@ -45,13 +51,21 @@ impl GoldfishEngine {
 	pub fn new(title: &'static str, package_reader: ReadAssetFn) -> Self {
 		let tracy = tracy::Client::start();
 		let window = Window::new(title).unwrap();
-		let renderer = None;
+		let game_state = std::ptr::null_mut();
+		let keys = [false; 255];
+		let mouse_delta = Default::default();
+
+		let (graphics_device, graphics_context) = GraphicsDevice::new_with_context(&window);
 
 		Self {
 			window,
+			graphics_device,
+			graphics_context,
 			package_reader,
 			tracy,
-			renderer,
+			game_state,
+			keys,
+			mouse_delta,
 		}
 	}
 
@@ -60,37 +74,57 @@ impl GoldfishEngine {
 		fn_ptr(uuid, asset_type)
 	}
 
-	pub fn run<F>(mut self, mut editor_update: F)
+	pub fn run<F>(&mut self, mut editor_update: F)
 	where
-		F: FnMut(&mut Self, Duration) + 'static,
+		F: FnMut(&mut Self, Duration),
 	{
-		self.renderer = Some(Renderer::new(&self.window, &self));
+		Window::run(
+			self.window.get_run_context(),
+			|dt, keys, mouse_delta, new_size| {
+				self.keys.copy_from_slice(keys);
+				self.mouse_delta = mouse_delta;
 
-		Window::run(self.window.get_run_context(), move |dt, new_size| {
-			tracy::span!();
-			let renderer = self.renderer.as_mut().unwrap();
+				tracy::span!();
+				// let renderer = self.renderer.as_mut().unwrap();
 
-			if let Some(size) = new_size {
-				renderer.graphics_context.on_resize(size);
+				if let Some(size) = new_size {
+					self.graphics_context.on_resize(size);
 
-				// TODO(Brandon): This is really really really fucking stupid, but it's the
-				// only way I've been able to stop this ERROR_NATIVE_WINDOW_IN_USE_KHR
-				// nonsense. I need to find a better solution to this
-				return;
-			}
-			renderer.update(&self.window);
+					// TODO(Brandon): This is really really really fucking stupid, but it's the
+					// only way I've been able to stop this ERROR_NATIVE_WINDOW_IN_USE_KHR
+					// nonsense. I need to find a better solution to this
+					return;
+				}
+				// renderer.update(&self.window);
 
-			// println!("Goldfish update {} ns", dt.as_nanos());
-			editor_update(&mut self, dt);
-			tracy::frame_mark();
-		});
-		// self.graphics_device.destroy_framebuffer(framebuffer);
+				editor_update(self, dt);
+				tracy::frame_mark();
+			},
+		);
+	}
+
+	pub fn lock_cursor(&self) {
+		self.window
+			.winit_window
+			.set_cursor_grab(winit::window::CursorGrabMode::Locked)
+			.unwrap();
+		self.window.winit_window.set_cursor_visible(false);
+	}
+
+	pub fn unlock_cursor(&self) {
+		self.window.winit_window.set_cursor_visible(true);
+		self.window
+			.winit_window
+			.set_cursor_grab(winit::window::CursorGrabMode::None)
+			.unwrap();
 	}
 }
 
 impl Drop for GoldfishEngine {
 	fn drop(&mut self) {
-		let renderer = self.renderer.take().unwrap();
-		renderer.destroy();
+		// let renderer = self.renderer.take().unwrap();
+		// renderer.destroy();
+		self.graphics_context.destroy();
+		self.graphics_device.destroy();
 	}
 }

@@ -28,12 +28,13 @@ custom_error! {pub SwapchainError
 }
 
 pub use buffer::VulkanBuffer;
-pub use descriptor::{VulkanDescriptorHeap, VulkanDescriptorSetHandle};
+pub use descriptor::{
+	VulkanDescriptorHandle, VulkanDescriptorHeap, VulkanDescriptorLayout,
+	VulkanDescriptorLayoutCache,
+};
 pub use device::{VulkanDevice, VulkanUploadContext};
 pub use framebuffer::VulkanFramebuffer;
-pub use pipeline::{
-	VulkanDescriptorSetLayout, VulkanOutputPipelineHandle, VulkanPipeline, VulkanPipelineHandle,
-};
+pub use pipeline::{VulkanOutputPipelineHandle, VulkanPipeline, VulkanPipelineHandle};
 pub use render_pass::VulkanRenderPass;
 pub use shader::VulkanShader;
 pub use texture::VulkanTexture;
@@ -54,6 +55,12 @@ pub enum VulkanRasterCmd {
 	),
 	EndRenderPass(),
 	DrawIndexed(u32, u32, u32, i32, u32),
+	BindDescriptor(
+		vk::PipelineBindPoint,
+		vk::PipelineLayout,
+		u32,
+		vk::DescriptorSet,
+	),
 	None,
 }
 
@@ -189,6 +196,19 @@ impl VulkanGraphicsContext {
 					vertex_offset,
 					first_instance,
 				),
+				VulkanRasterCmd::BindDescriptor(
+					pipeline_bind_point,
+					pipeline_layout,
+					first_set,
+					descriptor_set,
+				) => raw.cmd_bind_descriptor_sets(
+					cmd_buf,
+					pipeline_bind_point,
+					pipeline_layout,
+					first_set,
+					&[descriptor_set],
+					&[],
+				),
 				VulkanRasterCmd::None => panic!("None raster command queued!"),
 			}
 		});
@@ -259,12 +279,19 @@ impl VulkanGraphicsContext {
 		&mut self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
+		descriptor_layouts: &[VulkanDescriptorLayout],
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
 	) -> VulkanOutputPipelineHandle {
-		self.swapchain
-			.create_raster_pipeline(vs, ps, depth_write, face_cull, push_constant_bytes)
+		self.swapchain.create_raster_pipeline(
+			vs,
+			ps,
+			descriptor_layouts,
+			depth_write,
+			face_cull,
+			push_constant_bytes,
+		)
 	}
 
 	pub fn get_raster_pipeline(
@@ -280,6 +307,71 @@ impl VulkanGraphicsContext {
 
 	pub fn draw_indexed(&self, index_count: u32) {
 		self.queue_raster_cmd(VulkanRasterCmd::DrawIndexed(index_count, 1, 0, 0, 0));
+	}
+
+	pub fn bind_graphics_descriptor(
+		&self,
+		descriptor_heap: &VulkanDescriptorHeap,
+		descriptor_set: &VulkanDescriptorHandle,
+		set: u32,
+		pipeline: &VulkanPipeline,
+	) {
+		let frame = self
+			.current_frame_info
+			.as_ref()
+			.expect("begin_frame was not called!")
+			.frame_index;
+
+		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
+		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor(
+			vk::PipelineBindPoint::GRAPHICS,
+			pipeline.pipeline_layout,
+			set,
+			descriptor,
+		));
+	}
+
+	pub fn write_uniform_buffers(
+		&mut self,
+		buffers: &[(u32, &VulkanBuffer)],
+		descriptor_heap: &VulkanDescriptorHeap,
+		descriptor_set: &VulkanDescriptorHandle,
+	) {
+		let frame = self
+			.current_frame_info
+			.as_ref()
+			.expect("begin_frame was not called!")
+			.frame_index;
+		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
+
+		let buffer_infos = buffers
+			.iter()
+			.map(|(_, buffer)| {
+				vk::DescriptorBufferInfo::builder()
+					.buffer(buffer.raw)
+					.offset(0)
+					.range(buffer.size as u64)
+					.build()
+			})
+			.collect::<Vec<_>>();
+
+		unsafe {
+			self.raw_device().update_descriptor_sets(
+				&buffers
+					.iter()
+					.enumerate()
+					.map(|(i, (binding, _))| {
+						vk::WriteDescriptorSet::builder()
+							.dst_set(descriptor)
+							.dst_binding(*binding)
+							.descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+							.buffer_info(&buffer_infos[i..=i])
+							.build()
+					})
+					.collect::<Vec<_>>(),
+				&[],
+			)
+		};
 	}
 }
 

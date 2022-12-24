@@ -1,6 +1,7 @@
 use super::{
 	VulkanGraphicsContext, VulkanRasterCmd,
 	{
+		descriptor::VulkanDescriptorLayout,
 		device::{VulkanDestructor, VulkanDevice},
 		render_pass::VulkanRenderPass,
 		shader::VulkanShader,
@@ -21,13 +22,8 @@ pub struct VulkanPipelineHandle(usize);
 pub struct VulkanOutputPipelineHandle(usize);
 
 pub struct VulkanPipeline {
-	pub descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
 	pub pipeline: vk::Pipeline,
 	pub pipeline_layout: vk::PipelineLayout,
-}
-
-pub struct VulkanDescriptorSetLayout {
-	pub raw: vk::DescriptorSetLayout,
 }
 
 type DescriptorSetLayout = HashMap<u32, rspirv_reflect::DescriptorInfo>;
@@ -42,19 +38,12 @@ impl VulkanRenderPass {
 	}
 }
 
-impl VulkanPipeline {
-	pub fn get_descriptor_layout(&self, set: u32) -> VulkanDescriptorSetLayout {
-		VulkanDescriptorSetLayout {
-			raw: self.descriptor_set_layouts[set as usize],
-		}
-	}
-}
-
 impl VulkanDevice {
 	pub fn create_raster_pipeline(
 		&self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
+		descriptor_layouts: &[VulkanDescriptorLayout],
 		render_pass: &mut VulkanRenderPass,
 		depth_write: bool,
 		face_cull: bool,
@@ -63,6 +52,7 @@ impl VulkanDevice {
 		let pipeline = self.create_raster_pipeline_impl(
 			vs,
 			ps,
+			descriptor_layouts,
 			render_pass.raw,
 			render_pass.color_attachments.len(),
 			depth_write,
@@ -80,41 +70,15 @@ impl VulkanDevice {
 		&self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
+		descriptor_layouts: &[VulkanDescriptorLayout],
 		render_pass: vk::RenderPass,
 		color_attachments_count: usize,
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
 	) -> VulkanPipeline {
-		let shaders = [vs, ps];
-		let stage_layouts = shaders
-			.iter()
-			.map(|shader| {
-				let bytes: Vec<u8> = shader
-					.code
-					.iter()
-					.flat_map(|code| code.to_ne_bytes())
-					.collect();
-
-				rspirv_reflect::Reflection::new_from_spirv(&bytes)
-					.expect("Failed to reflect shader")
-					.get_descriptor_sets()
-					.unwrap()
-			})
-			.collect::<Vec<_>>();
-
-		// TODO(Brandon): See if we need to use the descriptor types, this is mostly taken from kajiya
-		let (descriptor_set_layouts, descriptor_types): (Vec<_>, Vec<_>) = self
-			.create_descriptor_set_layouts(
-				&merge_stage_layouts(stage_layouts),
-				vk::ShaderStageFlags::ALL_GRAPHICS,
-			)
-			.iter()
-			.cloned()
-			.unzip();
-
 		let mut layout_create_info =
-			vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
+			vk::PipelineLayoutCreateInfo::builder().set_layouts(descriptor_layouts);
 
 		let push_constant_range = vk::PushConstantRange {
 			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
@@ -279,8 +243,6 @@ impl VulkanDevice {
 		}[0];
 
 		VulkanPipeline {
-			// descriptor_pool,
-			descriptor_set_layouts,
 			pipeline,
 			pipeline_layout,
 		}
@@ -299,16 +261,10 @@ impl VulkanDevice {
 	}
 
 	fn destroy_raster_pipeline_impl(&mut self, pipeline: VulkanPipeline) {
-		let mut destructors: Vec<VulkanDestructor> =
-			Vec::with_capacity(pipeline.descriptor_set_layouts.len() + 2);
-
-		for layout in pipeline.descriptor_set_layouts {
-			destructors.push(VulkanDestructor::DescriptorSetLayout(layout));
-		}
-
-		destructors.push(VulkanDestructor::PipelineLayout(pipeline.pipeline_layout));
-		destructors.push(VulkanDestructor::Pipeline(pipeline.pipeline));
-		self.queue_destruction(&mut destructors);
+		self.queue_destruction(&mut [
+			VulkanDestructor::PipelineLayout(pipeline.pipeline_layout),
+			VulkanDestructor::Pipeline(pipeline.pipeline),
+		]);
 	}
 
 	fn create_descriptor_set_layouts(
@@ -503,6 +459,7 @@ impl VulkanSwapchain {
 		&mut self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
+		descriptor_layouts: &[VulkanDescriptorLayout],
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
@@ -510,6 +467,7 @@ impl VulkanSwapchain {
 		let pipeline = self.device.create_raster_pipeline_impl(
 			vs,
 			ps,
+			descriptor_layouts,
 			self.render_pass,
 			1usize,
 			depth_write,

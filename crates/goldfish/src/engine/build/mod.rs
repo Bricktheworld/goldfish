@@ -1,9 +1,9 @@
 use crate::renderer::DescriptorSetInfo;
-pub trait UniformBuffer {
-	fn size(&self);
-	fn write_buffer(&self, output: &mut [u8]);
+pub trait UniformBuffer<const S: usize> {
+	fn size() -> usize;
+	fn as_buffer(&self) -> [u8; S];
 }
 
-pub trait DescriptorInfo {
-	fn get() -> DescriptorSetInfo;
+pub trait Descriptor {
+	fn info() -> DescriptorSetInfo;
 }

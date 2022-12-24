@@ -4,17 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-glam = "0.21.3"
 goldfish = { path = "../goldfish" }
+bytemuck = { version = "1.12.3", features = ["derive"] }
+glam = "0.21.3"
+im = "15.1.0"
+uuid = "1.2.1"
+winit = "0.27.4"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
 thiserror = "1.0.37"
 hassle-rs = "0.9.0"
-spirv-reflect = "0.2.3"
+spirv_cross = { version = "0.23.1", default-features = false, features = [
+	"hlsl",
+] }
 byteorder = "1.4.3"
 goldfish = { path = "../goldfish" }
+itertools = "0.7.4"
 
 [lib]
 name = "game"

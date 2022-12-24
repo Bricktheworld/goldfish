@@ -17,22 +17,22 @@ struct Camera
 	float3 position;
 	float4x4 view;
 	float4x4 proj;
-	float4x4 viewProj;
+	float4x4 view_proj;
 };
 
-[[vk::binding(0,0)]] ConstantBuffer<Camera> gCamera : register(CAMERA_BUFFER_SLOT);
+[[vk::binding(0,0)]] ConstantBuffer<Camera> g_camera : register(CAMERA_BUFFER_SLOT);
 
 struct Model
 {
 	float4x4 matrix;
 };
-[[vk::binding(1,0)]] ConstantBuffer<Model> gModel : register(b1);
+[[vk::binding(1,0)]] ConstantBuffer<Model> g_model : register(b1);
 
 struct PushConstants
 {
-	float4x4 Model;
+	float4x4 model;
 };
 
-// [[vk::push_constant]] PushConstants gPushConstants;
+// [[vk::push_constant]] PushConstants g_pushConstants;
 
 #endif
