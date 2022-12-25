@@ -49,6 +49,7 @@ impl Transform {
 struct Game {
 	layout_cache: DescriptorLayoutCache,
 	common_desc0_heap: DescriptorHeap,
+	common_desc0_layout: DescriptorLayout,
 	vs: Shader,
 	ps: Shader,
 	cube: Mesh,
@@ -60,6 +61,8 @@ struct Game {
 
 	camera_transform: Transform,
 	cube_transform: Transform,
+
+	render_graph_cache: RenderGraphCache,
 }
 
 impl Game {
@@ -108,6 +111,85 @@ impl Game {
 		);
 
 		if let Ok(_) = graphics_context.begin_frame(&engine.window) {
+			let mut render_graph = RenderGraph::new(&mut self.render_graph_cache);
+			let attachment_1 = {
+				let mut first_pass = render_graph.add_pass("first_pass");
+
+				first_pass.add_attachment(AttachmentDesc {
+					name: "Attachment 1",
+					width: engine.window.get_size().width,
+					height: engine.window.get_size().height,
+					format: TextureFormat::RGBA8,
+					load_op: LoadOp::Clear,
+					store_op: StoreOp::Store,
+				})
+			};
+			let color_attachment = {
+				let mut geometry_pass = render_graph.add_pass("geometry");
+
+				let color_attachment = geometry_pass.add_attachment(AttachmentDesc {
+					name: "Geometry Color",
+					width: engine.window.get_size().width,
+					height: engine.window.get_size().height,
+					format: TextureFormat::RGBA8,
+					load_op: LoadOp::Clear,
+					store_op: StoreOp::Store,
+				});
+
+				geometry_pass.decl_read_attachment(attachment_1.into());
+
+				let render_pass = geometry_pass.add_render_pass(RenderPassDesc {
+					name: "Geometry Render Pass",
+					color_attachments: vec![color_attachment],
+					depth_attachment: None,
+				});
+
+				let pipeline = geometry_pass.add_raster_pipeline(RasterPipelineDesc {
+					name: "Cube Pipeline",
+					vs: &self.vs,
+					ps: &self.ps,
+					descriptor_layouts: vec![&self.common_desc0_layout],
+					render_pass,
+				});
+
+				geometry_pass.cmd_bind_raster_pipeline(pipeline);
+
+				geometry_pass.cmd_begin_render_pass(
+					render_pass,
+					Color {
+						r: 0.0,
+						g: 0.0,
+						b: 0.0,
+						a: 1.0,
+					},
+				);
+
+				geometry_pass.cmd_end_render_pass();
+
+				color_attachment
+			};
+			{
+				let mut post_processing_pass = render_graph.add_pass("post_processing");
+
+				post_processing_pass.decl_read_attachment(color_attachment.into());
+				post_processing_pass.decl_read_attachment(attachment_1.into());
+
+				let render_pass = post_processing_pass.add_output_render_pass();
+				post_processing_pass.cmd_begin_render_pass(
+					render_pass,
+					Color {
+						r: 0.0,
+						g: 0.0,
+						b: 0.0,
+						a: 1.0,
+					},
+				);
+
+				post_processing_pass.cmd_end_render_pass();
+			}
+
+			render_graph.execute(graphics_context, graphics_device);
+
 			let model = common_inc::Model {
 				matrix: Mat4::from_scale_rotation_translation(
 					self.cube_transform.scale,
@@ -196,8 +278,8 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 		&mut layout_cache,
 		DescriptorSetInfo {
 			bindings: im::hashmap! {
-				0 => DescriptorBindingType::UniformBuffer,
-				1 => DescriptorBindingType::UniformBuffer,
+				0 => DescriptorBindingType::CBuffer,
+				1 => DescriptorBindingType::CBuffer,
 			},
 		},
 	);
@@ -240,9 +322,12 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let cube = upload_context.create_mesh(&mesh_package.vertices, &mesh_package.indices);
 
+	let render_graph_cache = RenderGraphCache::default();
+
 	let game = Box::new(Game {
 		layout_cache,
 		common_desc0_heap,
+		common_desc0_layout,
 		common_desc,
 		vs,
 		ps,
@@ -265,6 +350,7 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 			},
 			..Default::default()
 		},
+		render_graph_cache,
 	});
 
 	engine.game_state = Box::into_raw(game) as *mut ();

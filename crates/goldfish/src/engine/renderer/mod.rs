@@ -13,6 +13,8 @@ use tracy_client as tracy;
 pub mod backends;
 pub mod render_graph;
 
+pub use render_graph::*;
+
 pub const VS_MAIN: &'static str = "vs_main";
 pub const PS_MAIN: &'static str = "ps_main";
 pub const CS_MAIN: &'static str = "cs_main";
@@ -42,7 +44,7 @@ impl FrameId {
 	}
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum TextureFormat {
 	RGB8,
 	RGB16,
@@ -97,14 +99,14 @@ bitflags! {
 
 pub use gpu_allocator::MemoryLocation;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum LoadOp {
 	Load,
 	Clear,
 	DontCare,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum StoreOp {
 	Store,
 	DontCare,
@@ -120,9 +122,14 @@ pub struct AttachmentDescription {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorBindingType {
-	UniformBuffer,
-	Sampler,
-	SampledImage,
+	Texture2D,
+	RWTexture2D,
+	Buffer,
+	RWBuffer,
+	SamplerState,
+	CBuffer,
+	StructuredBuffer,
+	RWStructuredBuffer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

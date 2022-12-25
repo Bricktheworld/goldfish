@@ -80,14 +80,29 @@ impl VulkanDevice {
 								vk::DescriptorSetLayoutBinding::builder()
 									.binding(*binding)
 									.descriptor_type(match *ty {
-										DescriptorBindingType::UniformBuffer => {
-											vk::DescriptorType::UNIFORM_BUFFER
+										DescriptorBindingType::Texture2D => {
+											vk::DescriptorType::SAMPLED_IMAGE
 										}
-										DescriptorBindingType::Sampler => {
+										DescriptorBindingType::RWTexture2D => {
+											vk::DescriptorType::STORAGE_IMAGE
+										}
+										DescriptorBindingType::Buffer => {
+											vk::DescriptorType::UNIFORM_TEXEL_BUFFER
+										}
+										DescriptorBindingType::RWBuffer => {
+											vk::DescriptorType::STORAGE_TEXEL_BUFFER
+										}
+										DescriptorBindingType::SamplerState => {
 											vk::DescriptorType::SAMPLER
 										}
-										DescriptorBindingType::SampledImage => {
-											vk::DescriptorType::SAMPLED_IMAGE
+										DescriptorBindingType::CBuffer => {
+											vk::DescriptorType::UNIFORM_BUFFER
+										}
+										DescriptorBindingType::StructuredBuffer => {
+											vk::DescriptorType::STORAGE_BUFFER
+										}
+										DescriptorBindingType::RWStructuredBuffer => {
+											vk::DescriptorType::STORAGE_BUFFER
 										}
 									})
 									.descriptor_count(1)

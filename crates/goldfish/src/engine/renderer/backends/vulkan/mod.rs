@@ -255,6 +255,10 @@ impl VulkanGraphicsContext {
 		self.queue_raster_cmd(VulkanRasterCmd::EndRenderPass());
 	}
 
+	pub fn end_render_pass(&self) {
+		self.queue_raster_cmd(VulkanRasterCmd::EndRenderPass());
+	}
+
 	fn get_output_framebuffer(&self) -> vk::Framebuffer {
 		self.current_frame_info
 			.as_ref()
