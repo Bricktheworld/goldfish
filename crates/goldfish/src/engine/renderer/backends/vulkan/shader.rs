@@ -1,6 +1,7 @@
 use super::device::{VulkanDestructor, VulkanDevice};
 use ash::vk;
 
+#[derive(Hash, PartialEq, Eq)]
 pub struct VulkanShader {
 	pub module: vk::ShaderModule,
 }

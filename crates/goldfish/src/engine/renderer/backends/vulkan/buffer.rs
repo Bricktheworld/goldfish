@@ -7,6 +7,8 @@ use ash::vk;
 use gpu_allocator::vulkan as vma;
 use gpu_allocator::MemoryLocation;
 
+use std::hash::{Hash, Hasher};
+
 impl From<BufferUsage> for vk::BufferUsageFlags {
 	fn from(usage: BufferUsage) -> vk::BufferUsageFlags {
 		let mut flags = vk::BufferUsageFlags::default();
@@ -58,6 +60,20 @@ pub struct VulkanBuffer {
 	pub usage: BufferUsage,
 	pub size: usize,
 }
+
+impl Hash for VulkanBuffer {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.raw.hash(state);
+	}
+}
+
+impl PartialEq for VulkanBuffer {
+	fn eq(&self, other: &Self) -> bool {
+		self.raw == other.raw
+	}
+}
+
+impl Eq for VulkanBuffer {}
 
 impl VulkanUploadContext {
 	pub fn create_buffer(
@@ -164,7 +180,7 @@ impl VulkanDevice {
 		}
 	}
 
-	pub fn update_buffer(&self, buffer: &mut VulkanBuffer, data: &[u8]) {
+	pub fn update_buffer(&self, buffer: &mut VulkanBuffer, data: &[u8]) -> bool {
 		if buffer.location != MemoryLocation::CpuToGpu {
 			panic!("Cannot update buffer that is not CpuToGpu!");
 		}
@@ -173,11 +189,17 @@ impl VulkanDevice {
 			panic!("Cannot update buffer with data that is too long!");
 		}
 
-		buffer
+		let dst = &mut buffer
 			.allocation
 			.mapped_slice_mut()
-			.expect("Failed to map allocation!")[0..data.len()]
-			.copy_from_slice(data);
+			.expect("Failed to map allocation!")[0..data.len()];
+
+		if dst != data {
+			dst.copy_from_slice(data);
+			return true;
+		}
+
+		return false;
 	}
 
 	pub fn destroy_buffer(&mut self, buffer: VulkanBuffer) {

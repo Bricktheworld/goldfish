@@ -1,11 +1,11 @@
 include!(concat!(env!("OUT_DIR"), "/materials.rs"));
 
-use goldfish::build::{Descriptor, UniformBuffer};
+use goldfish::build::UniformBuffer;
 use goldfish::game::GameLib;
 use goldfish::package::{AssetType, Package};
 use goldfish::renderer;
 use goldfish::GoldfishEngine;
-use goldfish::{Color, Mat4, Quat, Vec3, Vec4};
+use goldfish::{Color, Mat4, Quat, Vec3};
 use renderer::*;
 use uuid::uuid;
 use winit::event::VirtualKeyCode;
@@ -46,10 +46,16 @@ impl Transform {
 	}
 }
 
+const COMMON_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
+	bindings: phf::phf_map! {
+		0u32 => DescriptorBindingType::CBuffer,
+		1u32 => DescriptorBindingType::CBuffer,
+	},
+};
+
 struct Game {
 	layout_cache: DescriptorLayoutCache,
 	common_desc0_heap: DescriptorHeap,
-	common_desc0_layout: DescriptorLayout,
 	vs: Shader,
 	ps: Shader,
 	cube: Mesh,
@@ -57,7 +63,6 @@ struct Game {
 	model_uniform: GpuBuffer,
 	common_desc: DescriptorHandle,
 	upload_context: UploadContext,
-	pipeline_handle: OutputPipelineHandle,
 
 	camera_transform: Transform,
 	cube_transform: Transform,
@@ -111,85 +116,6 @@ impl Game {
 		);
 
 		if let Ok(_) = graphics_context.begin_frame(&engine.window) {
-			let mut render_graph = RenderGraph::new(&mut self.render_graph_cache);
-			let attachment_1 = {
-				let mut first_pass = render_graph.add_pass("first_pass");
-
-				first_pass.add_attachment(AttachmentDesc {
-					name: "Attachment 1",
-					width: engine.window.get_size().width,
-					height: engine.window.get_size().height,
-					format: TextureFormat::RGBA8,
-					load_op: LoadOp::Clear,
-					store_op: StoreOp::Store,
-				})
-			};
-			let color_attachment = {
-				let mut geometry_pass = render_graph.add_pass("geometry");
-
-				let color_attachment = geometry_pass.add_attachment(AttachmentDesc {
-					name: "Geometry Color",
-					width: engine.window.get_size().width,
-					height: engine.window.get_size().height,
-					format: TextureFormat::RGBA8,
-					load_op: LoadOp::Clear,
-					store_op: StoreOp::Store,
-				});
-
-				geometry_pass.decl_read_attachment(attachment_1.into());
-
-				let render_pass = geometry_pass.add_render_pass(RenderPassDesc {
-					name: "Geometry Render Pass",
-					color_attachments: vec![color_attachment],
-					depth_attachment: None,
-				});
-
-				let pipeline = geometry_pass.add_raster_pipeline(RasterPipelineDesc {
-					name: "Cube Pipeline",
-					vs: &self.vs,
-					ps: &self.ps,
-					descriptor_layouts: vec![&self.common_desc0_layout],
-					render_pass,
-				});
-
-				geometry_pass.cmd_bind_raster_pipeline(pipeline);
-
-				geometry_pass.cmd_begin_render_pass(
-					render_pass,
-					Color {
-						r: 0.0,
-						g: 0.0,
-						b: 0.0,
-						a: 1.0,
-					},
-				);
-
-				geometry_pass.cmd_end_render_pass();
-
-				color_attachment
-			};
-			{
-				let mut post_processing_pass = render_graph.add_pass("post_processing");
-
-				post_processing_pass.decl_read_attachment(color_attachment.into());
-				post_processing_pass.decl_read_attachment(attachment_1.into());
-
-				let render_pass = post_processing_pass.add_output_render_pass();
-				post_processing_pass.cmd_begin_render_pass(
-					render_pass,
-					Color {
-						r: 0.0,
-						g: 0.0,
-						b: 0.0,
-						a: 1.0,
-					},
-				);
-
-				post_processing_pass.cmd_end_render_pass();
-			}
-
-			render_graph.execute(graphics_context, graphics_device);
-
 			let model = common_inc::Model {
 				matrix: Mat4::from_scale_rotation_translation(
 					self.cube_transform.scale,
@@ -221,32 +147,107 @@ impl Game {
 			graphics_device.update_buffer(&mut self.camera_uniform, &camera.as_buffer());
 			graphics_device.update_buffer(&mut self.model_uniform, &model.as_buffer());
 
-			graphics_context.write_uniform_buffers(
-				&[(0, &self.camera_uniform), (1, &self.model_uniform)],
-				&self.common_desc0_heap,
-				&self.common_desc,
-			);
-			graphics_context.bind_output_framebuffer(Color {
-				r: 0.0,
-				g: 0.0,
-				b: 0.0,
-				a: 1.0,
-			});
+			let mut render_graph = RenderGraph::new(&mut self.render_graph_cache);
+			{
+				let mut geometry_pass = render_graph.add_pass("geometry");
 
-			let pipeline = graphics_context
-				.get_raster_pipeline(self.pipeline_handle)
-				.unwrap();
-			graphics_context.bind_raster_pipeline(pipeline);
+				let descriptor = geometry_pass.add_descriptor_set(DescriptorDesc {
+					name: "Geometry descriptor",
+					descriptor_layout: COMMON_DESC_INFO,
+					bindings: vec![
+						(
+							0,
+							DescriptorBindingDesc::ImportedBuffer(&self.camera_uniform),
+						),
+						(
+							1,
+							DescriptorBindingDesc::ImportedBuffer(&self.model_uniform),
+						),
+					],
+				});
 
-			graphics_context.bind_graphics_descriptor(
-				&self.common_desc0_heap,
-				&self.common_desc,
-				0,
-				pipeline,
-			);
-			graphics_context.draw_mesh(&self.cube);
+				let render_pass = geometry_pass.add_output_render_pass();
 
-			graphics_context.unbind_output_framebuffer();
+				let pipeline = geometry_pass.add_raster_pipeline(RasterPipelineDesc {
+					name: "Cube Pipeline",
+					vs: &self.vs,
+					ps: &self.ps,
+					descriptor_layouts: vec![COMMON_DESC_INFO],
+					render_pass,
+					depth_write: true,
+					face_cull: true,
+					push_constant_bytes: 0,
+				});
+
+				geometry_pass.cmd_begin_render_pass(
+					render_pass,
+					Color {
+						r: 0.0,
+						g: 0.0,
+						b: 0.0,
+						a: 1.0,
+					},
+				);
+
+				geometry_pass.cmd_bind_raster_pipeline(pipeline);
+				geometry_pass.cmd_bind_raster_descriptor(descriptor, 0, pipeline);
+
+				geometry_pass.cmd_draw_mesh(&self.cube);
+
+				geometry_pass.cmd_end_render_pass();
+			}
+			// {
+			// 	let mut post_processing_pass = render_graph.add_pass("post_processing");
+
+			// 	post_processing_pass.decl_read_attachment(
+			// 		color_attachment.into(),
+			// 		ImageLayout::ShaderReadOnlyOptimal,
+			// 	);
+			// 	post_processing_pass
+			// 		.decl_read_attachment(attachment_1.into(), ImageLayout::ShaderReadOnlyOptimal);
+
+			// 	let render_pass = post_processing_pass.add_output_render_pass();
+			// 	post_processing_pass.cmd_begin_render_pass(
+			// 		render_pass,
+			// 		Color {
+			// 			r: 0.0,
+			// 			g: 0.0,
+			// 			b: 0.0,
+			// 			a: 1.0,
+			// 		},
+			// 	);
+
+			// 	post_processing_pass.cmd_end_render_pass();
+			// }
+
+			render_graph.execute(graphics_context, graphics_device);
+
+			// graphics_context.write_uniform_buffers(
+			// 	&[(0, &self.camera_uniform), (1, &self.model_uniform)],
+			// 	&self.common_desc0_heap,
+			// 	&self.common_desc,
+			// );
+			// graphics_context.begin_output_render_pass(Color {
+			// 	r: 0.0,
+			// 	g: 0.0,
+			// 	b: 0.0,
+			// 	a: 1.0,
+			// });
+
+			// let pipeline = graphics_context
+			// 	.get_raster_pipeline(self.pipeline_handle)
+			// 	.unwrap();
+			// graphics_context.bind_raster_pipeline(pipeline);
+
+			// graphics_context.bind_descriptor(
+			// 	&self.common_desc0_heap,
+			// 	&self.common_desc,
+			// 	0,
+			// 	pipeline,
+			// );
+			// graphics_context.draw_mesh(&self.cube);
+
+			// graphics_context.end_render_pass();
 			graphics_context.end_frame(&engine.window);
 		}
 	}
@@ -255,11 +256,12 @@ impl Game {
 		let graphics_device = &mut engine.graphics_device;
 		let graphics_context = &mut engine.graphics_context;
 
+		self.render_graph_cache.destroy(graphics_device);
+
 		graphics_device.destroy_buffer(self.camera_uniform);
 		graphics_device.destroy_buffer(self.model_uniform);
 		graphics_device.destroy_mesh(self.cube);
 		graphics_device.destroy_upload_context(self.upload_context);
-		graphics_context.destroy_raster_pipeline(self.pipeline_handle);
 		graphics_device.destroy_shader(self.vs);
 		graphics_device.destroy_shader(self.ps);
 
@@ -274,15 +276,8 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let mut layout_cache = graphics_device.create_descriptor_layout_cache();
 
-	let common_desc0_layout = graphics_device.get_graphics_layout(
-		&mut layout_cache,
-		DescriptorSetInfo {
-			bindings: im::hashmap! {
-				0 => DescriptorBindingType::CBuffer,
-				1 => DescriptorBindingType::CBuffer,
-			},
-		},
-	);
+	let common_desc0_layout =
+		graphics_device.get_graphics_layout(&mut layout_cache, COMMON_DESC_INFO);
 
 	let mut common_desc0_heap = graphics_device.create_descriptor_heap(common_desc0_layout);
 
@@ -290,9 +285,6 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let vs = graphics_device.create_shader(&test_shader::VS_BYTES);
 	let ps = graphics_device.create_shader(&test_shader::PS_BYTES);
-
-	let pipeline_handle =
-		graphics_context.create_raster_pipeline(&vs, &ps, &[common_desc0_layout], true, true, 0);
 
 	let mut upload_context = graphics_device.create_upload_context();
 
@@ -327,11 +319,9 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 	let game = Box::new(Game {
 		layout_cache,
 		common_desc0_heap,
-		common_desc0_layout,
 		common_desc,
 		vs,
 		ps,
-		pipeline_handle,
 		cube,
 		upload_context,
 		camera_uniform,

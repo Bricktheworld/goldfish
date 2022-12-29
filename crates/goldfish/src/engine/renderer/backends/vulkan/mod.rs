@@ -15,7 +15,7 @@ use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
 use swapchain::{FrameInfo, VulkanSwapchain};
 
-use crate::renderer::FrameId;
+use crate::renderer::{DescriptorSetInfo, FrameId};
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
@@ -34,7 +34,7 @@ pub use descriptor::{
 };
 pub use device::{VulkanDevice, VulkanUploadContext};
 pub use framebuffer::VulkanFramebuffer;
-pub use pipeline::{VulkanOutputPipelineHandle, VulkanPipeline, VulkanPipelineHandle};
+pub use pipeline::VulkanPipeline;
 pub use render_pass::VulkanRenderPass;
 pub use shader::VulkanShader;
 pub use texture::VulkanTexture;
@@ -214,7 +214,7 @@ impl VulkanGraphicsContext {
 		});
 	}
 
-	pub fn bind_output_framebuffer(&self, color: Color) {
+	pub fn begin_output_render_pass(&self, color: Color) {
 		tracy::span!();
 
 		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
@@ -251,8 +251,49 @@ impl VulkanGraphicsContext {
 		));
 	}
 
-	pub fn unbind_output_framebuffer(&self) {
-		self.queue_raster_cmd(VulkanRasterCmd::EndRenderPass());
+	pub fn begin_render_pass(
+		&self,
+		render_pass: &VulkanRenderPass,
+		framebuffer: &VulkanFramebuffer,
+		clear_value: Color,
+	) {
+		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
+			vk::Viewport::builder()
+				.x(0.0)
+				.y(framebuffer.height as f32)
+				.width(framebuffer.width as f32)
+				.height(-(framebuffer.height as f32))
+				.min_depth(0.0)
+				.max_depth(1.0)
+				.build(),
+		));
+
+		let extent = vk::Extent2D {
+			width: framebuffer.width,
+			height: framebuffer.height,
+		};
+
+		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(
+			vk::Rect2D::builder()
+				.offset(vk::Offset2D { x: 0, y: 0 })
+				.extent(extent)
+				.build(),
+		));
+
+		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass(
+			render_pass.raw,
+			framebuffer.raw,
+			vk::Rect2D {
+				offset: vk::Offset2D { x: 0, y: 0 },
+				extent,
+			},
+			vk::ClearValue {
+				color: vk::ClearColorValue {
+					float32: [clear_value.r, clear_value.g, clear_value.b, clear_value.a],
+				},
+			},
+			vk::SubpassContents::INLINE,
+		));
 	}
 
 	pub fn end_render_pass(&self) {
@@ -287,7 +328,7 @@ impl VulkanGraphicsContext {
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
-	) -> VulkanOutputPipelineHandle {
+	) -> VulkanPipeline {
 		self.swapchain.create_raster_pipeline(
 			vs,
 			ps,
@@ -298,22 +339,11 @@ impl VulkanGraphicsContext {
 		)
 	}
 
-	pub fn get_raster_pipeline(
-		&self,
-		pipeline_handle: VulkanOutputPipelineHandle,
-	) -> Option<&VulkanPipeline> {
-		self.swapchain.get_raster_pipeline(pipeline_handle)
-	}
-
-	pub fn destroy_raster_pipeline(&mut self, pipeline_handle: VulkanOutputPipelineHandle) {
-		self.swapchain.destroy_raster_pipeline(pipeline_handle);
-	}
-
 	pub fn draw_indexed(&self, index_count: u32) {
 		self.queue_raster_cmd(VulkanRasterCmd::DrawIndexed(index_count, 1, 0, 0, 0));
 	}
 
-	pub fn bind_graphics_descriptor(
+	pub fn bind_descriptor(
 		&self,
 		descriptor_heap: &VulkanDescriptorHeap,
 		descriptor_set: &VulkanDescriptorHandle,
@@ -335,9 +365,10 @@ impl VulkanGraphicsContext {
 		));
 	}
 
-	pub fn write_uniform_buffers(
+	pub fn update_descriptor_buffers(
 		&mut self,
 		buffers: &[(u32, &VulkanBuffer)],
+		descriptor_layout: &'static DescriptorSetInfo,
 		descriptor_heap: &VulkanDescriptorHeap,
 		descriptor_set: &VulkanDescriptorHandle,
 	) {
@@ -368,7 +399,9 @@ impl VulkanGraphicsContext {
 						vk::WriteDescriptorSet::builder()
 							.dst_set(descriptor)
 							.dst_binding(*binding)
-							.descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+							.descriptor_type(
+								(*descriptor_layout.bindings.get(&binding).unwrap()).into(),
+							)
 							.buffer_info(&buffer_infos[i..=i])
 							.build()
 					})

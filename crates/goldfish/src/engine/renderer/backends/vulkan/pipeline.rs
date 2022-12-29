@@ -15,12 +15,6 @@ use std::ffi::CString;
 
 use tracy_client as tracy;
 
-#[derive(Clone, Copy)]
-pub struct VulkanPipelineHandle(usize);
-
-#[derive(Clone, Copy)]
-pub struct VulkanOutputPipelineHandle(usize);
-
 pub struct VulkanPipeline {
 	pub pipeline: vk::Pipeline,
 	pub pipeline_layout: vk::PipelineLayout,
@@ -29,27 +23,18 @@ pub struct VulkanPipeline {
 type DescriptorSetLayout = HashMap<u32, rspirv_reflect::DescriptorInfo>;
 type StageDescriptorSetLayouts = HashMap<u32, DescriptorSetLayout>;
 
-impl VulkanRenderPass {
-	pub fn get_raster_pipeline(
-		&self,
-		pipeline_handle: VulkanPipelineHandle,
-	) -> Option<&VulkanPipeline> {
-		self.pipelines[pipeline_handle.0].as_ref()
-	}
-}
-
 impl VulkanDevice {
 	pub fn create_raster_pipeline(
 		&self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
 		descriptor_layouts: &[VulkanDescriptorLayout],
-		render_pass: &mut VulkanRenderPass,
+		render_pass: &VulkanRenderPass,
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
-	) -> VulkanPipelineHandle {
-		let pipeline = self.create_raster_pipeline_impl(
+	) -> VulkanPipeline {
+		self.create_raster_pipeline_impl(
 			vs,
 			ps,
 			descriptor_layouts,
@@ -58,12 +43,7 @@ impl VulkanDevice {
 			depth_write,
 			face_cull,
 			push_constant_bytes,
-		);
-
-		let handle = render_pass.pipelines.len();
-		render_pass.pipelines.push(Some(pipeline));
-
-		VulkanPipelineHandle(handle)
+		)
 	}
 
 	fn create_raster_pipeline_impl(
@@ -83,7 +63,7 @@ impl VulkanDevice {
 		let push_constant_range = vk::PushConstantRange {
 			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
 			offset: 0,
-			size: push_constant_bytes as _,
+			size: push_constant_bytes as u32,
 		};
 
 		if push_constant_bytes > 0 {
@@ -248,19 +228,7 @@ impl VulkanDevice {
 		}
 	}
 
-	pub fn destroy_raster_pipeline(
-		&mut self,
-		pipeline_handle: VulkanPipelineHandle,
-		render_pass: &mut VulkanRenderPass,
-	) {
-		self.destroy_raster_pipeline_impl(
-			render_pass.pipelines[pipeline_handle.0]
-				.take()
-				.expect("Attempting to destroy pipeline that has already been destroyed!"),
-		);
-	}
-
-	fn destroy_raster_pipeline_impl(&mut self, pipeline: VulkanPipeline) {
+	pub fn destroy_pipeline(&mut self, pipeline: VulkanPipeline) {
 		self.queue_destruction(&mut [
 			VulkanDestructor::PipelineLayout(pipeline.pipeline_layout),
 			VulkanDestructor::Pipeline(pipeline.pipeline),
@@ -463,8 +431,8 @@ impl VulkanSwapchain {
 		depth_write: bool,
 		face_cull: bool,
 		push_constant_bytes: usize,
-	) -> VulkanOutputPipelineHandle {
-		let pipeline = self.device.create_raster_pipeline_impl(
+	) -> VulkanPipeline {
+		self.device.create_raster_pipeline_impl(
 			vs,
 			ps,
 			descriptor_layouts,
@@ -473,27 +441,7 @@ impl VulkanSwapchain {
 			depth_write,
 			face_cull,
 			push_constant_bytes,
-		);
-
-		let handle = self.pipelines.len();
-		self.pipelines.push(Some(pipeline));
-
-		VulkanOutputPipelineHandle(handle)
-	}
-
-	pub fn get_raster_pipeline(
-		&self,
-		pipeline_handle: VulkanOutputPipelineHandle,
-	) -> Option<&VulkanPipeline> {
-		self.pipelines[pipeline_handle.0].as_ref()
-	}
-
-	pub fn destroy_raster_pipeline(&mut self, pipeline_handle: VulkanOutputPipelineHandle) {
-		self.device.destroy_raster_pipeline_impl(
-			self.pipelines[pipeline_handle.0]
-				.take()
-				.expect("Attempting to destroy pipeline that has already been destroyed!"),
-		);
+		)
 	}
 }
 

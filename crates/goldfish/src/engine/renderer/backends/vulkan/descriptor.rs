@@ -9,9 +9,25 @@ use std::collections::HashMap;
 
 pub type VulkanDescriptorLayout = vk::DescriptorSetLayout;
 
+#[derive(Default)]
 pub struct VulkanDescriptorLayoutCache {
-	pub graphics_layouts: HashMap<DescriptorSetInfo, vk::DescriptorSetLayout>,
-	pub compute_layouts: HashMap<DescriptorSetInfo, vk::DescriptorSetLayout>,
+	pub graphics_layouts: HashMap<*const DescriptorSetInfo, vk::DescriptorSetLayout>,
+	pub compute_layouts: HashMap<*const DescriptorSetInfo, vk::DescriptorSetLayout>,
+}
+
+impl From<DescriptorBindingType> for vk::DescriptorType {
+	fn from(ty: DescriptorBindingType) -> Self {
+		match ty {
+			DescriptorBindingType::Texture2D => vk::DescriptorType::SAMPLED_IMAGE,
+			DescriptorBindingType::RWTexture2D => vk::DescriptorType::STORAGE_IMAGE,
+			DescriptorBindingType::Buffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+			DescriptorBindingType::RWBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+			DescriptorBindingType::SamplerState => vk::DescriptorType::SAMPLER,
+			DescriptorBindingType::CBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+			DescriptorBindingType::StructuredBuffer => vk::DescriptorType::STORAGE_BUFFER,
+			DescriptorBindingType::RWStructuredBuffer => vk::DescriptorType::STORAGE_BUFFER,
+		}
+	}
 }
 
 impl VulkanDevice {
@@ -25,27 +41,22 @@ impl VulkanDevice {
 	pub fn get_graphics_layout(
 		&self,
 		cache: &mut VulkanDescriptorLayoutCache,
-		info: DescriptorSetInfo,
+		info: &'static DescriptorSetInfo,
 	) -> VulkanDescriptorLayout {
-		if let Some(layout) = cache.graphics_layouts.get(&info) {
-			return *layout;
-		}
-		let layout = self.create_descriptor_layout(&info, vk::ShaderStageFlags::ALL_GRAPHICS);
-		cache.graphics_layouts.insert(info, layout);
-		layout
+		*cache.graphics_layouts.entry(info).or_insert_with(|| {
+			self.create_descriptor_layout(&info, vk::ShaderStageFlags::ALL_GRAPHICS)
+		})
 	}
 
 	pub fn get_compute_layout(
 		&self,
 		cache: &mut VulkanDescriptorLayoutCache,
-		info: DescriptorSetInfo,
+		info: &'static DescriptorSetInfo,
 	) -> VulkanDescriptorLayout {
-		if let Some(layout) = cache.compute_layouts.get(&info) {
-			return *layout;
-		}
-		let layout = self.create_descriptor_layout(&info, vk::ShaderStageFlags::COMPUTE);
-		cache.compute_layouts.insert(info, layout);
-		layout
+		*cache
+			.compute_layouts
+			.entry(info)
+			.or_insert_with(|| self.create_descriptor_layout(&info, vk::ShaderStageFlags::COMPUTE))
 	}
 
 	pub fn destroy_descriptor_layout_cache(&mut self, cache: VulkanDescriptorLayoutCache) {
@@ -75,36 +86,11 @@ impl VulkanDevice {
 					&vk::DescriptorSetLayoutCreateInfo::builder().bindings(
 						&info
 							.bindings
-							.iter()
-							.map(|(binding, ty)| {
+							.entries()
+							.map(|(binding, &ty)| {
 								vk::DescriptorSetLayoutBinding::builder()
 									.binding(*binding)
-									.descriptor_type(match *ty {
-										DescriptorBindingType::Texture2D => {
-											vk::DescriptorType::SAMPLED_IMAGE
-										}
-										DescriptorBindingType::RWTexture2D => {
-											vk::DescriptorType::STORAGE_IMAGE
-										}
-										DescriptorBindingType::Buffer => {
-											vk::DescriptorType::UNIFORM_TEXEL_BUFFER
-										}
-										DescriptorBindingType::RWBuffer => {
-											vk::DescriptorType::STORAGE_TEXEL_BUFFER
-										}
-										DescriptorBindingType::SamplerState => {
-											vk::DescriptorType::SAMPLER
-										}
-										DescriptorBindingType::CBuffer => {
-											vk::DescriptorType::UNIFORM_BUFFER
-										}
-										DescriptorBindingType::StructuredBuffer => {
-											vk::DescriptorType::STORAGE_BUFFER
-										}
-										DescriptorBindingType::RWStructuredBuffer => {
-											vk::DescriptorType::STORAGE_BUFFER
-										}
-									})
+									.descriptor_type(ty.into())
 									.descriptor_count(1)
 									.stage_flags(stage_flags)
 									.build()
@@ -127,6 +113,7 @@ pub struct VulkanDescriptorHeap {
 	pub allocated_descriptors: Vec<u32>,
 }
 
+#[derive(Clone, Copy)]
 pub struct VulkanDescriptorHandle {
 	pub id: u32,
 }

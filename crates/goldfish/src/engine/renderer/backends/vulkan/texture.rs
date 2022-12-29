@@ -3,6 +3,7 @@ use crate::renderer::{TextureFormat, TextureUsage};
 use ash::vk;
 use gpu_allocator::vulkan as vma;
 use gpu_allocator::MemoryLocation;
+use std::hash::{Hash, Hasher};
 
 pub struct VulkanTexture {
 	pub width: u32,
@@ -11,12 +12,29 @@ pub struct VulkanTexture {
 	pub image: vk::Image,
 	pub sampler: vk::Sampler,
 	pub image_view: vk::ImageView,
-	pub layout: vk::ImageLayout,
 
 	pub allocation: vma::Allocation,
 	pub format: TextureFormat,
 	pub usage: TextureUsage,
 }
+
+impl Hash for VulkanTexture {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.image.hash(state);
+		self.sampler.hash(state);
+		self.image_view.hash(state);
+	}
+}
+
+impl PartialEq for VulkanTexture {
+	fn eq(&self, other: &Self) -> bool {
+		self.image == other.image
+			&& self.sampler == other.sampler
+			&& self.image_view == other.image_view
+	}
+}
+
+impl Eq for VulkanTexture {}
 
 impl VulkanDevice {
 	pub fn create_texture(
@@ -36,12 +54,20 @@ impl VulkanDevice {
 			}
 		}
 
-		if usage.contains(TextureUsage::TEXTURE) {
-			usage_flags |= vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+		if usage.contains(TextureUsage::SAMPLED) {
+			usage_flags |= vk::ImageUsageFlags::SAMPLED;
+		}
+
+		if usage.contains(TextureUsage::TRANSFER_SRC) {
+			usage_flags |= vk::ImageUsageFlags::TRANSFER_SRC;
+		}
+
+		if usage.contains(TextureUsage::TRANSFER_DST) {
+			usage_flags |= vk::ImageUsageFlags::TRANSFER_DST;
 		}
 
 		if usage.contains(TextureUsage::STORAGE) {
-			usage_flags |= vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST;
+			usage_flags |= vk::ImageUsageFlags::STORAGE;
 		}
 
 		let mut guard = self.vma.lock().unwrap();
@@ -149,7 +175,6 @@ impl VulkanDevice {
 			image,
 			sampler,
 			image_view,
-			layout: vk::ImageLayout::GENERAL,
 
 			allocation,
 			format,

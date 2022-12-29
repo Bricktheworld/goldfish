@@ -10,6 +10,7 @@ glam = "0.21.3"
 im = "15.1.0"
 uuid = "1.2.1"
 winit = "0.27.4"
+phf = { version = "0.11.1", features = ["macros"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
