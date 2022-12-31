@@ -52,6 +52,13 @@ const FULLSCREEN_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
 	},
 };
 
+const DEPTH_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
+	bindings: phf::phf_map! {
+		0u32 => DescriptorBindingType::Texture2D,
+		1u32 => DescriptorBindingType::SamplerState,
+	},
+};
+
 struct Game {
 	vs: Shader,
 	ps: Shader,
@@ -59,6 +66,7 @@ struct Game {
 	ps_textured: Shader,
 	vs_fullscreen: Shader,
 	ps_fullscreen: Shader,
+	ps_depth_debug: Shader,
 	cube: Mesh,
 	camera_uniform: GpuBuffer,
 	model_uniform: GpuBuffer,
@@ -116,7 +124,7 @@ impl Game {
 				matrix: Mat4::from_scale_rotation_translation(self.cube_transform.scale, self.cube_transform.rotation, self.cube_transform.position),
 			};
 
-			let proj = Mat4::perspective_infinite_lh(1.6, engine.window.get_size().aspect() as f32, 0.01);
+			let proj = Mat4::perspective_infinite_reverse_lh(1.6, engine.window.get_size().aspect() as f32, 0.01);
 
 			let view = Mat4::look_at_lh(
 				self.camera_transform.position,
@@ -135,18 +143,18 @@ impl Game {
 			graphics_device.update_buffer(&mut self.model_uniform, &model.as_buffer());
 
 			let mut render_graph = RenderGraph::new(&mut self.render_graph_cache);
-			let geometry_output_attachment = {
+			let depth_prepass_attachment = {
 				let mut geometry_pass = render_graph.add_pass("geometry");
 
-				let mut output = geometry_pass.add_attachment(AttachmentDesc {
-					name: "Geometry output",
-					format: TextureFormat::RGBA8,
-					width: engine.window.get_size().width,
-					height: engine.window.get_size().height,
-					load_op: LoadOp::Clear,
-					store_op: StoreOp::Store,
-					usage: TextureUsage::SAMPLED | TextureUsage::ATTACHMENT,
-				});
+				// let mut output = geometry_pass.add_attachment(AttachmentDesc {
+				// 	name: "Geometry output",
+				// 	format: TextureFormat::RGBA8,
+				// 	width: engine.window.get_size().width,
+				// 	height: engine.window.get_size().height,
+				// 	load_op: LoadOp::Clear,
+				// 	store_op: StoreOp::Store,
+				// 	usage: TextureUsage::SAMPLED | TextureUsage::ATTACHMENT,
+				// });
 
 				let mut depth = geometry_pass.add_attachment(AttachmentDesc {
 					name: "Geometry depth",
@@ -169,16 +177,17 @@ impl Game {
 
 				let render_pass = geometry_pass.add_render_pass(RenderPassDesc {
 					name: "Geometry render pass",
-					color_attachments: &mut [&mut output],
+					color_attachments: &mut [],
 					depth_attachment: Some(&mut depth),
 				});
 
 				let pipeline = geometry_pass.add_raster_pipeline(RasterPipelineDesc {
 					name: "Cube Pipeline",
 					vs: &self.vs,
-					ps: &self.ps,
+					ps: None,
 					descriptor_layouts: &[COMMON_DESC_INFO],
 					render_pass,
+					depth_compare_op: Some(DepthCompareOp::Greater),
 					depth_write: true,
 					face_cull: FaceCullMode::Back,
 					push_constant_bytes: 0,
@@ -186,10 +195,7 @@ impl Game {
 					polygon_mode: PolygonMode::Fill,
 				});
 
-				geometry_pass.cmd_begin_render_pass(
-					render_pass,
-					&[ClearValue::Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, ClearValue::DepthStencil { depth: 0.0, stencil: 0 }],
-				);
+				geometry_pass.cmd_begin_render_pass(render_pass, &[ClearValue::DepthStencil { depth: 0.0, stencil: 0 }]);
 
 				geometry_pass.cmd_bind_raster_pipeline(pipeline);
 				geometry_pass.cmd_bind_raster_descriptor(descriptor, 0, pipeline);
@@ -198,7 +204,7 @@ impl Game {
 
 				geometry_pass.cmd_end_render_pass();
 
-				output
+				depth
 			};
 			// {
 			// 	let mut sampler_pass = render_graph.add_pass("sampler pass");
@@ -254,9 +260,10 @@ impl Game {
 				let pipeline = post_processing_pass.add_raster_pipeline(RasterPipelineDesc {
 					name: "Fullscreen Pipeline",
 					vs: &self.vs_fullscreen,
-					ps: &self.ps_fullscreen,
-					descriptor_layouts: &[FULLSCREEN_DESC_INFO],
+					ps: Some(&self.ps_depth_debug),
+					descriptor_layouts: &[DEPTH_DESC_INFO],
 					render_pass,
+					depth_compare_op: None,
 					depth_write: false,
 					face_cull: FaceCullMode::Front,
 					push_constant_bytes: 0,
@@ -266,10 +273,10 @@ impl Game {
 
 				let descriptor0 = post_processing_pass.add_descriptor_set(DescriptorDesc {
 					name: "Fullscreen Descriptor 0",
-					descriptor_layout: FULLSCREEN_DESC_INFO,
+					descriptor_layout: DEPTH_DESC_INFO,
 					bindings: &mut [
-						(0, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
-						(1, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
+						(0, DescriptorBindingDesc::Attachment(depth_prepass_attachment.read())),
+						(1, DescriptorBindingDesc::Attachment(depth_prepass_attachment.read())),
 					],
 				});
 
@@ -302,6 +309,7 @@ impl Game {
 		graphics_device.destroy_shader(self.ps_textured);
 		graphics_device.destroy_shader(self.vs_fullscreen);
 		graphics_device.destroy_shader(self.ps_fullscreen);
+		graphics_device.destroy_shader(self.ps_depth_debug);
 	}
 }
 
@@ -316,6 +324,8 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let vs_fullscreen = graphics_device.create_shader(&fullscreen::VS_BYTES);
 	let ps_fullscreen = graphics_device.create_shader(&fullscreen::PS_BYTES);
+
+	let ps_depth_debug = graphics_device.create_shader(&debug_depth::PS_BYTES);
 
 	let mut upload_context = graphics_device.create_upload_context();
 
@@ -342,6 +352,7 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 		ps_textured,
 		vs_fullscreen,
 		ps_fullscreen,
+		ps_depth_debug,
 		cube,
 		upload_context,
 		camera_uniform,
@@ -350,7 +361,7 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 		camera_heading: 0.0,
 		camera_pitch: 0.0,
 		cube_transform: Transform {
-			position: Vec3 { x: 0.0, y: 0.0, z: 10.0 },
+			position: Vec3 { x: 0.0, y: 0.0, z: 2.0 },
 			scale: Vec3 { x: 1.0, y: 1.0, z: 1.0 },
 			..Default::default()
 		},

@@ -94,6 +94,18 @@ pub enum PolygonMode {
 }
 
 #[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum DepthCompareOp {
+	Never,
+	Less,
+	Equal,
+	LessOrEqual,
+	Greater,
+	GreaterOrEqual,
+	NotEqual,
+	Always,
+}
+
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum VertexAttributeFormat {
 	F32,
 	F32Vec2,

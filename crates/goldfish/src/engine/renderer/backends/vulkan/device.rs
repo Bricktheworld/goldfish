@@ -285,7 +285,7 @@ impl VulkanDevice {
 				vk::Format::D32_SFLOAT,
 				// vk::Format::D24_UNORM_S8_UINT,
 				// vk::Format::D16_UNORM_S8_UINT,
-				vk::Format::D16_UNORM,
+				// vk::Format::D16_UNORM,
 			];
 
 			let mut depth_format: Option<vk::Format> = None;

@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
-pub enum PassCmd {
+enum PassCmd {
 	BeginRenderPass {
 		render_pass: GraphRenderPassHandle,
 		clear_values: Vec<ClearValue>,
@@ -11,10 +11,13 @@ pub enum PassCmd {
 	BindRasterPipeline {
 		pipeline: GraphRasterPipelineHandle,
 	},
+	BindComputePipeline {
+		pipeline: GraphComputePipelineHandle,
+	},
 	BindDescriptor {
 		set: u32,
 		descriptor: GraphDescriptorHandle,
-		pipeline: GraphRasterPipelineHandle,
+		pipeline: GraphPipelineHandle,
 	},
 	DrawMesh {
 		mesh: GraphImportedMeshHandle,
@@ -28,22 +31,16 @@ pub enum PassCmd {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct BufferCacheKey {}
-
-#[derive(Default)]
-struct BufferCache {}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct TextureCacheKey {
-	width: u32,
-	height: u32,
-	format: TextureFormat,
-	usage: TextureUsage,
+struct BufferCacheKey {
+	size: usize,
+	usage: BufferUsage,
+	location: MemoryLocation,
 }
 
 #[derive(Default)]
-struct TextureCache {
-	cache: HashMap<TextureCacheKey, Vec<Texture>>,
+struct BufferCache {
+	buffers: Vec<GpuBuffer>,
+	cache: HashMap<BufferCacheKey, Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -88,10 +85,11 @@ struct RenderPassCache {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct RasterPipelineCacheKey {
-	vs: ash::vk::ShaderModule, // TODO(Brandon): Make this platform agnostic or find some better way to do this.
-	ps: ash::vk::ShaderModule, // This applies to all borrowed resources where we need some hashable way of identifying them.
+	vs: ash::vk::ShaderModule,         // TODO(Brandon): Make this platform agnostic or find some better way to do this.
+	ps: Option<ash::vk::ShaderModule>, // This applies to all borrowed resources where we need some hashable way of identifying them.
 	descriptor_layouts: Vec<DescriptorLayout>,
 	render_pass: usize,
+	depth_compare_op: Option<DepthCompareOp>,
 	depth_write: bool,
 	face_cull: FaceCullMode,
 	push_constant_bytes: usize,
@@ -105,6 +103,18 @@ struct RasterPipelineCache {
 	cache: HashMap<RasterPipelineCacheKey, usize>,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct ComputePipelineCacheKey {
+	cs: ash::vk::ShaderModule, // TODO(Brandon): Same thing as raster pipeline cache key
+	descriptor_layouts: Vec<DescriptorLayout>,
+}
+
+#[derive(Default)]
+struct ComputePipelineCache {
+	pipelines: Vec<Pipeline>,
+	cache: HashMap<ComputePipelineCacheKey, usize>,
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum DescriptorHeapCacheKeyBinding {
 	ImportedBuffer {
@@ -115,7 +125,7 @@ enum DescriptorHeapCacheKeyBinding {
 		sampler: ash::vk::Sampler,
 		image_view: ash::vk::ImageView,
 	}, // We need a better way of identifying them.
-	OwnedBuffer {
+	Buffer {
 		buffer: usize,
 	},
 	Attachment {
@@ -136,11 +146,11 @@ struct DescriptorHeapCache {
 #[derive(Default)]
 pub struct RenderGraphCache {
 	buffer_cache: BufferCache,
-	texture_cache: TextureCache,
 	attachment_cache: AttachmentCache,
 	framebuffer_cache: FramebufferCache,
 	render_pass_cache: RenderPassCache,
 	raster_pipeline_cache: RasterPipelineCache,
+	compute_pipeline_cache: ComputePipelineCache,
 	descriptor_layout_cache: DescriptorLayoutCache,
 	descriptor_heap_caches: HashMap<*const DescriptorSetInfo, DescriptorHeapCache>,
 }
@@ -191,13 +201,19 @@ impl RenderGraphCache {
 	fn alloc_raster_pipeline(&mut self, graphics_context: &mut GraphicsContext, graphics_device: &GraphicsDevice, key: &RasterPipelineCacheKey) -> usize {
 		*self.raster_pipeline_cache.cache.entry(key.clone()).or_insert_with(|| {
 			println!("Allocated pipeline!");
+			// TODO(Brandon): Kinda a messy hack to get around rust, not sure if there is a better way to do this...
+			let ps = Shader {
+				module: key.ps.unwrap_or(ash::vk::ShaderModule::null()),
+			};
+			let ps = key.ps.map_or(None, |_| Some(&ps));
 
 			// TODO(Brandon): Really good example of how we should allow for fetching of the render pass from the swapchain.
 			self.raster_pipeline_cache.pipelines.push(if key.render_pass == usize::MAX {
 				graphics_context.create_raster_pipeline(
 					&Shader { module: key.vs },
-					&Shader { module: key.ps },
+					ps,
 					&key.descriptor_layouts,
+					key.depth_compare_op,
 					key.depth_write,
 					key.face_cull,
 					key.push_constant_bytes,
@@ -207,9 +223,10 @@ impl RenderGraphCache {
 			} else {
 				graphics_device.create_raster_pipeline(
 					&Shader { module: key.vs },
-					&Shader { module: key.ps },
+					ps,
 					&key.descriptor_layouts,
 					&mut self.render_pass_cache.render_passes[key.render_pass],
+					key.depth_compare_op,
 					key.depth_write,
 					key.face_cull,
 					key.push_constant_bytes,
@@ -230,6 +247,25 @@ impl RenderGraphCache {
 		&self.raster_pipeline_cache.pipelines[self.get_raster_pipeline_index(key)]
 	}
 
+	fn alloc_compute_pipeline(&mut self, graphics_device: &GraphicsDevice, key: &ComputePipelineCacheKey) -> usize {
+		*self.compute_pipeline_cache.cache.entry(key.clone()).or_insert_with(|| {
+			println!("Allocated compute pipeline");
+			self.compute_pipeline_cache
+				.pipelines
+				.push(graphics_device.create_compute_pipeline(&Shader { module: key.cs }, &key.descriptor_layouts));
+
+			self.compute_pipeline_cache.pipelines.len() - 1
+		})
+	}
+
+	fn get_compute_pipeline_index(&self, key: &ComputePipelineCacheKey) -> usize {
+		*self.compute_pipeline_cache.cache.get(key).unwrap()
+	}
+
+	fn get_compute_pipeline(&self, key: &ComputePipelineCacheKey) -> &Pipeline {
+		&self.compute_pipeline_cache.pipelines[self.get_compute_pipeline_index(key)]
+	}
+
 	fn alloc_attachments(&mut self, graphics_device: &GraphicsDevice, key: &AttachmentCacheKey, count: usize) {
 		let attachments = self.attachment_cache.cache.entry(key.clone()).or_default();
 		while attachments.len() < count {
@@ -238,6 +274,15 @@ impl RenderGraphCache {
 			self.attachment_cache
 				.attachments
 				.push(graphics_device.create_texture(key.width, key.height, key.format, key.usage | TextureUsage::ATTACHMENT));
+		}
+	}
+
+	fn alloc_buffers(&mut self, graphics_device: &GraphicsDevice, key: &BufferCacheKey, count: usize) {
+		let buffers = self.buffer_cache.cache.entry(*key).or_default();
+		while buffers.len() < count {
+			println!("Allocated buffer!");
+			buffers.push(self.buffer_cache.buffers.len());
+			self.buffer_cache.buffers.push(graphics_device.create_empty_buffer(key.size, key.location, key.usage, None));
 		}
 	}
 
@@ -258,6 +303,17 @@ impl RenderGraphCache {
 
 	fn register_graphics_descriptor_layout(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo) -> DescriptorLayout {
 		let layout = graphics_device.get_graphics_layout(&mut self.descriptor_layout_cache, descriptor_info);
+
+		self.descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
+			heap: graphics_device.create_descriptor_heap(layout),
+			cache: Default::default(),
+		});
+
+		layout
+	}
+
+	fn register_compute_descriptor_layout(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo) -> DescriptorLayout {
+		let layout = graphics_device.get_compute_layout(&mut self.descriptor_layout_cache, descriptor_info);
 
 		self.descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
 			heap: graphics_device.create_descriptor_heap(layout),
@@ -303,6 +359,14 @@ pub struct AttachmentDesc {
 	pub usage: TextureUsage,
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct BufferDesc {
+	pub name: &'static str,
+	pub size: usize,
+	pub usage: BufferUsage,
+	pub location: MemoryLocation,
+}
+
 pub struct RenderPassDesc<'a, 'b> {
 	pub name: &'static str,
 	pub color_attachments: &'b mut [&'b mut MutableGraphAttachmentHandle],
@@ -313,9 +377,10 @@ pub struct RenderPassDesc<'a, 'b> {
 pub struct RasterPipelineDesc<'a, 'b> {
 	pub name: &'static str,
 	pub vs: &'a Shader,
-	pub ps: &'a Shader,
+	pub ps: Option<&'a Shader>,
 	pub descriptor_layouts: &'b [&'static DescriptorSetInfo],
 	pub render_pass: GraphRenderPassHandle,
+	pub depth_compare_op: Option<DepthCompareOp>,
 	pub depth_write: bool,
 	pub face_cull: FaceCullMode,
 	pub push_constant_bytes: usize,
@@ -326,7 +391,8 @@ pub struct RasterPipelineDesc<'a, 'b> {
 pub enum DescriptorBindingDesc<'a, 'b> {
 	ImportedBuffer(&'a GpuBuffer),
 	ImportedTexture(&'a Texture),
-	OwnedBuffer(GraphBufferHandle),
+	Buffer(GraphBufferHandle),
+	MutableBuffer(&'b mut MutableGraphBufferHandle),
 	Attachment(GraphAttachmentHandle),
 	MutableAttachment(&'b mut MutableGraphAttachmentHandle),
 }
@@ -369,7 +435,8 @@ pub struct GraphImportedMeshHandle {
 enum GraphOwnedResourceDescriptorBinding {
 	ImportedBuffer(GraphImportedBufferHandle),
 	ImportedTexture(GraphImportedTextureHandle),
-	OwnedBuffer(GraphBufferHandle),
+	Buffer(GraphBufferHandle),
+	MutableBuffer(MutableGraphBufferHandle),
 	Attachment(GraphAttachmentHandle),
 	MutableAttachment(MutableGraphAttachmentHandle),
 }
@@ -379,14 +446,20 @@ enum GraphOwnedResource {
 	RasterPipeline {
 		name: &'static str,
 		vs: GraphImportedShaderHandle,
-		ps: GraphImportedShaderHandle,
+		ps: Option<GraphImportedShaderHandle>,
 		descriptor_layouts: Vec<&'static DescriptorSetInfo>,
 		render_pass: GraphRenderPassHandle,
+		depth_compare_op: Option<DepthCompareOp>,
 		depth_write: bool,
 		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
 		vertex_input_info: VertexInputInfo,
 		polygon_mode: PolygonMode,
+	},
+	ComputePipeline {
+		name: &'static str,
+		cs: GraphImportedShaderHandle,
+		descriptor_layouts: Vec<&'static DescriptorSetInfo>,
 	},
 	RenderPass {
 		name: &'static str,
@@ -422,6 +495,17 @@ pub struct GraphRasterPipelineHandle {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct GraphComputePipelineHandle {
+	id: usize,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum GraphPipelineHandle {
+	Raster(GraphRasterPipelineHandle),
+	Compute(GraphComputePipelineHandle),
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GraphAttachmentHandle {
 	id: usize,
 	src_stage: ash::vk::PipelineStageFlags,
@@ -430,11 +514,6 @@ pub struct GraphAttachmentHandle {
 	dst_access: ash::vk::AccessFlags,
 	initial_layout: ImageLayout,
 	final_layout: ImageLayout,
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct GraphBufferHandle {
-	id: usize,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -456,6 +535,34 @@ impl MutableGraphAttachmentHandle {
 			dst_stage: ash::vk::PipelineStageFlags::VERTEX_SHADER | ash::vk::PipelineStageFlags::FRAGMENT_SHADER | ash::vk::PipelineStageFlags::COMPUTE_SHADER,
 			dst_access: ash::vk::AccessFlags::SHADER_READ,
 			final_layout: ImageLayout::ShaderReadOnlyOptimal,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct GraphBufferHandle {
+	id: usize,
+	src_stage: ash::vk::PipelineStageFlags,
+	dst_stage: ash::vk::PipelineStageFlags,
+	src_access: ash::vk::AccessFlags,
+	dst_access: ash::vk::AccessFlags,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct MutableGraphBufferHandle {
+	id: usize,
+	stage: ash::vk::PipelineStageFlags,
+	access: ash::vk::AccessFlags,
+}
+
+impl MutableGraphBufferHandle {
+	pub fn read(self) -> GraphBufferHandle {
+		GraphBufferHandle {
+			id: self.id,
+			src_stage: self.stage,
+			src_access: self.access,
+			dst_stage: ash::vk::PipelineStageFlags::VERTEX_SHADER | ash::vk::PipelineStageFlags::FRAGMENT_SHADER | ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+			dst_access: ash::vk::AccessFlags::SHADER_READ,
 		}
 	}
 }
@@ -483,11 +590,14 @@ struct PassDependencyNode {
 
 #[derive(Debug, Clone)]
 pub struct RecordedPass {
-	pub name: &'static str,
+	name: &'static str,
 	pass: PassHandle,
-	pub cmds: Vec<PassCmd>,
-	pub read_attachments: HashSet<GraphAttachmentHandle>,
-	pub write_attachments: HashSet<MutableGraphAttachmentHandle>,
+	cmds: Vec<PassCmd>,
+	read_attachments: HashSet<GraphAttachmentHandle>,
+	write_attachments: HashSet<MutableGraphAttachmentHandle>,
+
+	read_buffers: HashSet<GraphBufferHandle>,
+	write_buffers: HashSet<MutableGraphBufferHandle>,
 }
 
 pub struct RenderGraph<'a> {
@@ -517,25 +627,31 @@ impl<T: Copy> VirtualToPhysicalResourceMap<T> {
 
 struct GraphPhysicalResourceMap {
 	attachment_map: VirtualToPhysicalResourceMap<usize>,
+	buffer_map: VirtualToPhysicalResourceMap<usize>,
 	descriptor_map: VirtualToPhysicalResourceMap<(DescriptorHandle, &'static DescriptorSetInfo)>,
 	render_pass_map: VirtualToPhysicalResourceMap<usize>,
 	framebuffer_map: VirtualToPhysicalResourceMap<usize>,
-	pipeline_map: VirtualToPhysicalResourceMap<usize>,
+	raster_pipeline_map: VirtualToPhysicalResourceMap<usize>,
+	compute_pipeline_map: VirtualToPhysicalResourceMap<usize>,
 }
 
 impl GraphPhysicalResourceMap {
 	fn new(graph: &mut RenderGraph, graphics_device: &mut GraphicsDevice, graphics_context: &mut GraphicsContext) -> Self {
 		let attachment_map = Self::alloc_attachments(graph, graphics_device);
-		let descriptor_map = Self::alloc_descriptors(graph, graphics_device, graphics_context, &attachment_map);
+		let buffer_map = Self::alloc_buffers(graph, graphics_device);
+		let descriptor_map = Self::alloc_descriptors(graph, graphics_device, graphics_context, &attachment_map, &buffer_map);
 		let (render_pass_map, framebuffer_map) = Self::alloc_render_passes(graph, graphics_device, &attachment_map);
-		let pipeline_map = Self::alloc_pipelines(graph, graphics_device, graphics_context, &render_pass_map);
+		let raster_pipeline_map = Self::alloc_raster_pipelines(graph, graphics_device, graphics_context, &render_pass_map);
+		let compute_pipeline_map = Self::alloc_compute_pipelines(graph, graphics_device);
 
 		Self {
 			attachment_map,
+			buffer_map,
 			descriptor_map,
 			render_pass_map,
 			framebuffer_map,
-			pipeline_map,
+			raster_pipeline_map,
+			compute_pipeline_map,
 		}
 	}
 
@@ -553,9 +669,15 @@ impl GraphPhysicalResourceMap {
 	}
 
 	fn get_raster_pipeline<'a>(&self, graph: &'a RenderGraph, pipeline: GraphRasterPipelineHandle) -> &'a Pipeline {
-		let physical_pipeline = self.pipeline_map.get_physical(pipeline.id);
+		let physical_pipeline = self.raster_pipeline_map.get_physical(pipeline.id);
 
 		&graph.cache.raster_pipeline_cache.pipelines[physical_pipeline]
+	}
+
+	fn get_compute_pipeline<'a>(&self, graph: &'a RenderGraph, pipeline: GraphComputePipelineHandle) -> &'a Pipeline {
+		let physical_pipeline = self.compute_pipeline_map.get_physical(pipeline.id);
+
+		&graph.cache.compute_pipeline_cache.pipelines[physical_pipeline]
 	}
 
 	fn get_descriptor<'a>(&self, graph: &'a RenderGraph, descriptor: GraphDescriptorHandle) -> (DescriptorHandle, &'a DescriptorHeap) {
@@ -567,6 +689,12 @@ impl GraphPhysicalResourceMap {
 		let physical_attachment = self.attachment_map.get_physical(attachment.id);
 
 		&graph.cache.attachment_cache.attachments[physical_attachment]
+	}
+
+	fn get_buffer<'a>(&self, graph: &'a RenderGraph, buffer: GraphBufferHandle) -> &'a GpuBuffer {
+		let physical_buffer = self.buffer_map.get_physical(buffer.id);
+
+		&graph.cache.buffer_cache.buffers[physical_buffer]
 	}
 
 	fn alloc_attachments(graph: &mut RenderGraph, graphics_device: &mut GraphicsDevice) -> VirtualToPhysicalResourceMap<usize> {
@@ -600,11 +728,43 @@ impl GraphPhysicalResourceMap {
 		attachment_map
 	}
 
+	fn alloc_buffers(graph: &mut RenderGraph, graphics_device: &mut GraphicsDevice) -> VirtualToPhysicalResourceMap<usize> {
+		let mut buffer_type_to_virtual = HashMap::<BufferCacheKey, Vec<usize>>::new();
+
+		for (i, resource) in graph.owned_resources.iter().enumerate() {
+			match resource {
+				&GraphOwnedResource::Buffer { size, usage, location, .. } => {
+					let key = BufferCacheKey { size, usage, location };
+
+					buffer_type_to_virtual.entry(key).or_default().push(i);
+				}
+				_ => {}
+			}
+		}
+
+		for (key, virtual_resources) in buffer_type_to_virtual.iter() {
+			graph.cache.alloc_buffers(graphics_device, key, virtual_resources.len());
+		}
+
+		let mut buffer_map = VirtualToPhysicalResourceMap::new();
+
+		// TODO(Brandon): Optimize this by mapping virtual to physical attachments based on existing framebuffers and descriptors to reduce allocations.
+		for (key, virtual_resources) in buffer_type_to_virtual {
+			for (i, virtual_resource) in virtual_resources.into_iter().enumerate() {
+				let index = graph.cache.buffer_cache.cache[&key][i];
+				buffer_map.map_physical(virtual_resource, index);
+			}
+		}
+
+		buffer_map
+	}
+
 	fn alloc_descriptors(
 		graph: &mut RenderGraph,
 		graphics_device: &mut GraphicsDevice,
 		graphics_context: &mut GraphicsContext,
 		attachment_map: &VirtualToPhysicalResourceMap<usize>,
+		buffer_map: &VirtualToPhysicalResourceMap<usize>,
 	) -> VirtualToPhysicalResourceMap<(DescriptorHandle, &'static DescriptorSetInfo)> {
 		let mut descriptor_map = VirtualToPhysicalResourceMap::new();
 		for (id, resource) in graph.owned_resources.iter().enumerate() {
@@ -628,7 +788,12 @@ impl GraphPhysicalResourceMap {
 										},
 										_ => unreachable!("Invalid texture handle!"),
 									},
-									GraphOwnedResourceDescriptorBinding::OwnedBuffer(_) => unimplemented!(),
+									GraphOwnedResourceDescriptorBinding::Buffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
+										buffer: buffer_map.get_physical(buffer.id),
+									},
+									GraphOwnedResourceDescriptorBinding::MutableBuffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
+										buffer: buffer_map.get_physical(buffer.id),
+									},
 									GraphOwnedResourceDescriptorBinding::Attachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
 										attachment: attachment_map.get_physical(attachment.id),
 									},
@@ -663,6 +828,7 @@ impl GraphPhysicalResourceMap {
 										GraphImportedResource::Buffer(buffer) => buffer,
 										_ => unreachable!("Invalid imported buffer!"),
 									},
+									GraphOwnedResourceDescriptorBinding::Buffer(buffer) => &graph.cache.buffer_cache.buffers[buffer_map.get_physical(buffer.id)],
 									_ => unreachable!(),
 								},
 							)
@@ -748,6 +914,10 @@ impl GraphPhysicalResourceMap {
 							&GraphOwnedResource::Attachment { width, .. } => width,
 							_ => unreachable!(),
 						})
+						.chain(depth_attachment.into_iter().map(|d| match &graph.owned_resources[d.id] {
+							&GraphOwnedResource::Attachment { width, .. } => width,
+							_ => unreachable!(),
+						}))
 						.min()
 						.unwrap_or(0);
 
@@ -757,6 +927,10 @@ impl GraphPhysicalResourceMap {
 							&GraphOwnedResource::Attachment { height, .. } => height,
 							_ => unreachable!(),
 						})
+						.chain(depth_attachment.into_iter().map(|d| match &graph.owned_resources[d.id] {
+							&GraphOwnedResource::Attachment { height, .. } => height,
+							_ => unreachable!(),
+						}))
 						.min()
 						.unwrap_or(0);
 
@@ -788,7 +962,7 @@ impl GraphPhysicalResourceMap {
 		(render_pass_map, framebuffer_map)
 	}
 
-	fn alloc_pipelines(
+	fn alloc_raster_pipelines(
 		graph: &mut RenderGraph,
 		graphics_device: &mut GraphicsDevice,
 		graphics_context: &mut GraphicsContext,
@@ -803,6 +977,7 @@ impl GraphPhysicalResourceMap {
 					ps,
 					descriptor_layouts,
 					render_pass,
+					depth_compare_op,
 					depth_write,
 					face_cull,
 					push_constant_bytes,
@@ -816,9 +991,13 @@ impl GraphPhysicalResourceMap {
 						_ => panic!("Invalid vertex shader handle!"),
 					};
 
-					let ps = match &graph.imported_resources[ps.id] {
-						GraphImportedResource::Shader(shader) => shader.module,
-						_ => panic!("Invalid vertex shader handle!"),
+					let ps = if let Some(ps) = ps {
+						match &graph.imported_resources[ps.id] {
+							GraphImportedResource::Shader(shader) => Some(shader.module),
+							_ => panic!("Invalid vertex shader handle!"),
+						}
+					} else {
+						None
 					};
 
 					let descriptor_layouts = descriptor_layouts
@@ -833,6 +1012,7 @@ impl GraphPhysicalResourceMap {
 						ps,
 						render_pass,
 						descriptor_layouts,
+						depth_compare_op: *depth_compare_op,
 						depth_write: *depth_write,
 						face_cull: *face_cull,
 						push_constant_bytes: *push_constant_bytes,
@@ -841,6 +1021,35 @@ impl GraphPhysicalResourceMap {
 					};
 
 					let pipeline = graph.cache.alloc_raster_pipeline(graphics_context, graphics_device, &key);
+					pipeline_map.map_physical(id, pipeline);
+				}
+				_ => {}
+			}
+		}
+
+		pipeline_map
+	}
+
+	fn alloc_compute_pipelines(graph: &mut RenderGraph, graphics_device: &mut GraphicsDevice) -> VirtualToPhysicalResourceMap<usize> {
+		let mut pipeline_map = VirtualToPhysicalResourceMap::new();
+
+		for (id, resource) in graph.owned_resources.iter().enumerate() {
+			match resource {
+				GraphOwnedResource::ComputePipeline { cs, descriptor_layouts, .. } => {
+					// TODO(Brandon): Definitely don't do it like this, this is a hack to get the raw pointer
+					let cs = match &graph.imported_resources[cs.id] {
+						GraphImportedResource::Shader(shader) => shader.module,
+						_ => panic!("Invalid compute shader handle!"),
+					};
+
+					let descriptor_layouts = descriptor_layouts
+						.into_iter()
+						.map(|info| graph.cache.register_compute_descriptor_layout(graphics_device, info))
+						.collect::<Vec<_>>();
+
+					let key = ComputePipelineCacheKey { cs, descriptor_layouts };
+
+					let pipeline = graph.cache.alloc_compute_pipeline(graphics_device, &key);
 					pipeline_map.map_physical(id, pipeline);
 				}
 				_ => {}
@@ -870,6 +1079,8 @@ impl<'a> RenderGraph<'a> {
 			cmds: Default::default(),
 			read_attachments: Default::default(),
 			write_attachments: Default::default(),
+			read_buffers: Default::default(),
+			write_buffers: Default::default(),
 		});
 
 		PassBuilder { graph: self, pass, recorded }
@@ -882,6 +1093,7 @@ impl<'a> RenderGraph<'a> {
 			.read_attachments
 			.iter()
 			.map(|a| self.resource_to_owning_pass[&a.id])
+			.chain(recorded_pass.read_buffers.iter().map(|b| self.resource_to_owning_pass[&b.id]))
 			// .chain(recorded_pass.write_attachments.iter().map(|a| self.resource_to_owning_pass[&a.id]))
 			.collect::<HashSet<_>>()
 			.into_iter()
@@ -942,6 +1154,27 @@ impl<'a> RenderGraph<'a> {
 							);
 						}
 
+						for &buffer in self.passes[pass.id].read_buffers.iter() {
+							let physical_buffer = resource_map.get_buffer(&self, buffer);
+
+							graphics_context.pipeline_barrier(
+								buffer.src_stage,
+								buffer.dst_stage,
+								ash::vk::DependencyFlags::empty(),
+								&[],
+								&[ash::vk::BufferMemoryBarrier::builder()
+									.buffer(physical_buffer.raw)
+									.size(physical_buffer.size as u64)
+									.offset(0)
+									.src_access_mask(buffer.src_access)
+									.dst_access_mask(buffer.dst_access)
+									.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+									.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+									.build()],
+								&[],
+							)
+						}
+
 						if let Some((render_pass, framebuffer)) = resource_map.get_render_pass(&self, *render_pass) {
 							graphics_context.begin_render_pass(render_pass, framebuffer, &clear_values);
 						} else {
@@ -953,8 +1186,16 @@ impl<'a> RenderGraph<'a> {
 						let pipeline = resource_map.get_raster_pipeline(&self, pipeline);
 						graphics_context.bind_raster_pipeline(pipeline);
 					}
+					&PassCmd::BindComputePipeline { pipeline } => {
+						let pipeline = resource_map.get_compute_pipeline(&self, pipeline);
+						graphics_context.bind_compute_pipeline(pipeline);
+					}
 					&PassCmd::BindDescriptor { set, descriptor, pipeline } => {
-						let pipeline = resource_map.get_raster_pipeline(&self, pipeline);
+						let pipeline = match pipeline {
+							GraphPipelineHandle::Raster(pipeline) => resource_map.get_raster_pipeline(&self, pipeline),
+							GraphPipelineHandle::Compute(pipeline) => resource_map.get_compute_pipeline(&self, pipeline),
+						};
+
 						let (descriptor, descriptor_heap) = resource_map.get_descriptor(&self, descriptor);
 
 						graphics_context.bind_descriptor(descriptor_heap, &descriptor, set, pipeline);
@@ -1026,6 +1267,24 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		}
 	}
 
+	pub fn add_buffer(&mut self, desc: BufferDesc) -> MutableGraphBufferHandle {
+		let id = self.graph.create_resource(
+			self.pass,
+			GraphOwnedResource::Buffer {
+				name: desc.name,
+				size: desc.size,
+				usage: desc.usage,
+				location: desc.location,
+			},
+		);
+
+		MutableGraphBufferHandle {
+			id,
+			stage: ash::vk::PipelineStageFlags::empty(),
+			access: ash::vk::AccessFlags::empty(),
+		}
+	}
+
 	fn decl_read_attachment(&mut self, attachment: GraphAttachmentHandle) {
 		let recorded = self.recorded.as_mut().unwrap();
 		recorded.read_attachments.insert(attachment);
@@ -1036,6 +1295,16 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		recorded.write_attachments.insert(attachment);
 	}
 
+	fn decl_read_buffer(&mut self, buffer: GraphBufferHandle) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.read_buffers.insert(buffer);
+	}
+
+	fn decl_write_buffer(&mut self, buffer: MutableGraphBufferHandle) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.write_buffers.insert(buffer);
+	}
+
 	pub fn add_raster_pipeline<'c>(&mut self, desc: RasterPipelineDesc<'a, 'c>) -> GraphRasterPipelineHandle {
 		let name = desc.name;
 
@@ -1043,12 +1312,17 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 			id: self.graph.import_resource(GraphImportedResource::Shader(desc.vs)),
 		};
 
-		let ps = GraphImportedShaderHandle {
-			id: self.graph.import_resource(GraphImportedResource::Shader(desc.ps)),
+		let ps = if let Some(ps) = desc.ps {
+			Some(GraphImportedShaderHandle {
+				id: self.graph.import_resource(GraphImportedResource::Shader(ps)),
+			})
+		} else {
+			None
 		};
 
 		let descriptor_layouts = desc.descriptor_layouts.to_vec();
 		let render_pass = desc.render_pass;
+		let depth_compare_op = desc.depth_compare_op;
 		let depth_write = desc.depth_write;
 		let face_cull = desc.face_cull;
 		let push_constant_bytes = desc.push_constant_bytes;
@@ -1063,6 +1337,7 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 				ps,
 				descriptor_layouts,
 				render_pass,
+				depth_compare_op,
 				depth_write,
 				face_cull,
 				push_constant_bytes,
@@ -1133,13 +1408,25 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 							let id = self.graph.import_resource(GraphImportedResource::Texture(texture));
 							GraphOwnedResourceDescriptorBinding::ImportedTexture(GraphImportedTextureHandle { id })
 						}
-						DescriptorBindingDesc::OwnedBuffer(buffer) => GraphOwnedResourceDescriptorBinding::OwnedBuffer(*buffer),
+						DescriptorBindingDesc::Buffer(buffer) => {
+							self.decl_read_buffer(*buffer);
+							GraphOwnedResourceDescriptorBinding::Buffer(*buffer)
+						}
+						DescriptorBindingDesc::MutableBuffer(buffer) => {
+							buffer.stage = ash::vk::PipelineStageFlags::VERTEX_SHADER | ash::vk::PipelineStageFlags::FRAGMENT_SHADER | ash::vk::PipelineStageFlags::COMPUTE_SHADER;
+							buffer.access = ash::vk::AccessFlags::SHADER_READ | ash::vk::AccessFlags::SHADER_WRITE;
+							self.decl_write_buffer(**buffer);
+							GraphOwnedResourceDescriptorBinding::MutableBuffer(**buffer)
+						}
 						DescriptorBindingDesc::Attachment(attachment) => {
 							self.decl_read_attachment(*attachment);
 							GraphOwnedResourceDescriptorBinding::Attachment(*attachment)
 						}
 						DescriptorBindingDesc::MutableAttachment(attachment) => {
+							unimplemented!();
 							attachment.layout = ImageLayout::General;
+							attachment.stage = ash::vk::PipelineStageFlags::VERTEX_SHADER | ash::vk::PipelineStageFlags::FRAGMENT_SHADER | ash::vk::PipelineStageFlags::COMPUTE_SHADER;
+							attachment.access = ash::vk::AccessFlags::SHADER_READ | ash::vk::AccessFlags::SHADER_WRITE;
 							self.decl_write_attachment(**attachment);
 							GraphOwnedResourceDescriptorBinding::MutableAttachment(**attachment)
 						}
@@ -1171,7 +1458,20 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 
 	pub fn cmd_bind_raster_descriptor(&mut self, descriptor: GraphDescriptorHandle, set: u32, pipeline: GraphRasterPipelineHandle) {
 		let recorded = self.recorded.as_mut().unwrap();
-		recorded.cmds.push(PassCmd::BindDescriptor { set, descriptor, pipeline });
+		recorded.cmds.push(PassCmd::BindDescriptor {
+			set,
+			descriptor,
+			pipeline: GraphPipelineHandle::Raster(pipeline),
+		});
+	}
+
+	pub fn cmd_bind_compute_descriptor(&mut self, descriptor: GraphDescriptorHandle, set: u32, pipeline: GraphComputePipelineHandle) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.cmds.push(PassCmd::BindDescriptor {
+			set,
+			descriptor,
+			pipeline: GraphPipelineHandle::Compute(pipeline),
+		});
 	}
 
 	pub fn cmd_draw_mesh(&mut self, mesh: &'a Mesh) {

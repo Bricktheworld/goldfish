@@ -15,7 +15,7 @@ use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
 use swapchain::{FrameInfo, VulkanSwapchain};
 
-use crate::renderer::{ClearValue, DescriptorSetInfo, FaceCullMode, FrameId, ImageLayout, PolygonMode, VertexInputInfo};
+use crate::renderer::{ClearValue, DepthCompareOp, DescriptorSetInfo, FaceCullMode, FrameId, ImageLayout, PolygonMode, VertexInputInfo};
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
@@ -349,8 +349,9 @@ impl VulkanGraphicsContext {
 	pub fn create_raster_pipeline(
 		&mut self,
 		vs: &VulkanShader,
-		ps: &VulkanShader,
+		ps: Option<&VulkanShader>,
 		descriptor_layouts: &[VulkanDescriptorLayout],
+		depth_compare_op: Option<DepthCompareOp>,
 		depth_write: bool,
 		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
@@ -363,6 +364,7 @@ impl VulkanGraphicsContext {
 			descriptor_layouts,
 			self.swapchain.render_pass,
 			1usize,
+			depth_compare_op,
 			depth_write,
 			face_cull,
 			push_constant_bytes,

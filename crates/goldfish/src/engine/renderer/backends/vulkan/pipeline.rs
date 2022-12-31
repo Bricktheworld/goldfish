@@ -8,7 +8,7 @@ use super::{
 		swapchain::VulkanSwapchain,
 	},
 };
-use crate::renderer::{FaceCullMode, PolygonMode, Vertex, VertexAttributeDescriptionBinding, VertexAttributeFormat, VertexInputInfo, CS_MAIN, PS_MAIN, VS_MAIN};
+use crate::renderer::{DepthCompareOp, FaceCullMode, PolygonMode, Vertex, VertexAttributeDescriptionBinding, VertexAttributeFormat, VertexInputInfo, CS_MAIN, PS_MAIN, VS_MAIN};
 use ash::vk;
 use std::collections::{hash_map::Entry, HashMap};
 use std::ffi::CString;
@@ -66,13 +66,29 @@ impl From<VertexAttributeDescriptionBinding> for vk::VertexInputAttributeDescrip
 	}
 }
 
+impl From<DepthCompareOp> for vk::CompareOp {
+	fn from(o: DepthCompareOp) -> Self {
+		match o {
+			DepthCompareOp::Never => vk::CompareOp::NEVER,
+			DepthCompareOp::Less => vk::CompareOp::LESS,
+			DepthCompareOp::Equal => vk::CompareOp::EQUAL,
+			DepthCompareOp::LessOrEqual => vk::CompareOp::LESS_OR_EQUAL,
+			DepthCompareOp::Greater => vk::CompareOp::GREATER,
+			DepthCompareOp::GreaterOrEqual => vk::CompareOp::GREATER_OR_EQUAL,
+			DepthCompareOp::NotEqual => vk::CompareOp::NOT_EQUAL,
+			DepthCompareOp::Always => vk::CompareOp::ALWAYS,
+		}
+	}
+}
+
 impl VulkanDevice {
 	pub fn create_raster_pipeline(
 		&self,
 		vs: &VulkanShader,
-		ps: &VulkanShader,
+		ps: Option<&VulkanShader>,
 		descriptor_layouts: &[VulkanDescriptorLayout],
 		render_pass: &VulkanRenderPass,
+		depth_compare_op: Option<DepthCompareOp>,
 		depth_write: bool,
 		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
@@ -85,6 +101,7 @@ impl VulkanDevice {
 			descriptor_layouts,
 			render_pass.raw,
 			render_pass.color_attachments.len(),
+			depth_compare_op,
 			depth_write,
 			face_cull,
 			push_constant_bytes,
@@ -96,10 +113,11 @@ impl VulkanDevice {
 	pub fn create_raster_pipeline_impl(
 		&self,
 		vs: &VulkanShader,
-		ps: &VulkanShader,
+		ps: Option<&VulkanShader>,
 		descriptor_layouts: &[VulkanDescriptorLayout],
 		render_pass: vk::RenderPass,
 		color_attachments_count: usize,
+		depth_compare_op: Option<DepthCompareOp>,
 		depth_write: bool,
 		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
@@ -121,18 +139,22 @@ impl VulkanDevice {
 		let pipeline_layout = unsafe { self.raw.create_pipeline_layout(&layout_create_info, None).expect("Failed to create pipeline layout!") };
 
 		let entry_names = [CString::new(VS_MAIN).unwrap(), CString::new(PS_MAIN).unwrap()];
-		let shader_stage_infos = [
-			vk::PipelineShaderStageCreateInfo::builder()
-				.module(vs.module)
-				.stage(vk::ShaderStageFlags::VERTEX)
-				.name(&entry_names[0])
-				.build(),
-			vk::PipelineShaderStageCreateInfo::builder()
-				.module(ps.module)
-				.stage(vk::ShaderStageFlags::FRAGMENT)
-				.name(&entry_names[1])
-				.build(),
-		];
+		let mut shader_stage_infos = vec![vk::PipelineShaderStageCreateInfo::builder()
+			.module(vs.module)
+			.stage(vk::ShaderStageFlags::VERTEX)
+			.name(&entry_names[0])
+			.build()];
+
+		if let Some(ps) = ps {
+			shader_stage_infos.push(
+				vk::PipelineShaderStageCreateInfo::builder()
+					.module(ps.module)
+					.stage(vk::ShaderStageFlags::FRAGMENT)
+					.name(&entry_names[1])
+					.build(),
+			);
+		}
+
 		let binding_descriptions = [vk::VertexInputBindingDescription::builder().binding(0).stride(vertex_input_info.stride).build()];
 		let attribute_descriptions = vertex_input_info.bindings.iter().map(|&b| b.into()).collect::<Vec<_>>();
 
@@ -170,15 +192,13 @@ impl VulkanDevice {
 		};
 
 		let depth_state_info = vk::PipelineDepthStencilStateCreateInfo {
-			depth_test_enable: 1,
+			depth_test_enable: if depth_compare_op.is_some() { 1 } else { 0 },
 			depth_write_enable: if depth_write { 1 } else { 0 },
-			depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
+			depth_compare_op: depth_compare_op.map_or(vk::CompareOp::default(), |c| c.into()),
 			depth_bounds_test_enable: 0,
-			front: noop_stencil_state,
-			back: noop_stencil_state,
-			min_depth_bounds: 0.0,
-			max_depth_bounds: 1.0,
 			stencil_test_enable: 0,
+			// front: noop_stencil_state,
+			// back: noop_stencil_state,
 			..Default::default()
 		};
 
@@ -232,7 +252,11 @@ impl VulkanDevice {
 		let stage = vk::PipelineShaderStageCreateInfo::builder().module(cs.module).stage(vk::ShaderStageFlags::COMPUTE).name(&name);
 
 		let compute_pipeline_info = vk::ComputePipelineCreateInfo::builder().layout(pipeline_layout).stage(stage.build());
-		let pipeline = unsafe { self.raw.create_compute_pipelines(vk::PipelineCache::null(), &[], None).expect("Failed to create compute pipeline!") }[0];
+		let pipeline = unsafe {
+			self.raw
+				.create_compute_pipelines(vk::PipelineCache::null(), &[compute_pipeline_info.build()], None)
+				.expect("Failed to create compute pipeline!")
+		}[0];
 		VulkanPipeline { pipeline, pipeline_layout }
 	}
 
@@ -245,9 +269,15 @@ impl VulkanSwapchain {}
 
 impl VulkanGraphicsContext {
 	pub fn bind_raster_pipeline(&self, pipeline: &VulkanPipeline) {
-		tracy::span!();
 		self.queue_raster_cmd(VulkanRasterCmd::BindPipeline {
 			bind_point: vk::PipelineBindPoint::GRAPHICS,
+			pipeline: pipeline.pipeline,
+		});
+	}
+
+	pub fn bind_compute_pipeline(&self, pipeline: &VulkanPipeline) {
+		self.queue_raster_cmd(VulkanRasterCmd::BindPipeline {
+			bind_point: vk::PipelineBindPoint::COMPUTE,
 			pipeline: pipeline.pipeline,
 		});
 	}
