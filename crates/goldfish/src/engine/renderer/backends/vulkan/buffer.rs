@@ -169,11 +169,19 @@ impl VulkanDevice {
 
 impl VulkanGraphicsContext {
 	pub fn bind_vertex_buffer(&self, buffer: &VulkanBuffer) {
-		self.queue_raster_cmd(VulkanRasterCmd::BindVertexBuffer(0, buffer.raw, 0));
+		self.queue_raster_cmd(VulkanRasterCmd::BindVertexBuffer {
+			first_binding: 0,
+			buffer: buffer.raw,
+			offset: 0,
+		});
 	}
 
 	pub fn bind_index_buffer(&self, buffer: &VulkanBuffer) {
-		self.queue_raster_cmd(VulkanRasterCmd::BindIndexBuffer(buffer.raw, 0, vk::IndexType::UINT16));
+		self.queue_raster_cmd(VulkanRasterCmd::BindIndexBuffer {
+			buffer: buffer.raw,
+			offset: 0,
+			index_type: vk::IndexType::UINT16,
+		});
 	}
 }
 // impl Vulkan

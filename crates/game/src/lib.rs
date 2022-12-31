@@ -5,7 +5,7 @@ use goldfish::game::GameLib;
 use goldfish::package::{AssetType, Package};
 use goldfish::renderer;
 use goldfish::GoldfishEngine;
-use goldfish::{Color, Mat4, Quat, Vec3};
+use goldfish::{Mat4, Quat, Vec3};
 use renderer::*;
 use uuid::uuid;
 use winit::event::VirtualKeyCode;
@@ -45,11 +45,20 @@ const SAMPLER_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
 	},
 };
 
+const FULLSCREEN_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
+	bindings: phf::phf_map! {
+		0u32 => DescriptorBindingType::Texture2D,
+		1u32 => DescriptorBindingType::SamplerState,
+	},
+};
+
 struct Game {
 	vs: Shader,
 	ps: Shader,
 	vs_textured: Shader,
 	ps_textured: Shader,
+	vs_fullscreen: Shader,
+	ps_fullscreen: Shader,
 	cube: Mesh,
 	camera_uniform: GpuBuffer,
 	model_uniform: GpuBuffer,
@@ -171,8 +180,10 @@ impl Game {
 					descriptor_layouts: &[COMMON_DESC_INFO],
 					render_pass,
 					depth_write: true,
-					face_cull: true,
+					face_cull: FaceCullMode::Back,
 					push_constant_bytes: 0,
+					vertex_input_info: Vertex::VERTEX_INFO,
+					polygon_mode: PolygonMode::Fill,
 				});
 
 				geometry_pass.cmd_begin_render_pass(
@@ -189,73 +200,87 @@ impl Game {
 
 				output
 			};
-			{
-				let mut sampler_pass = render_graph.add_pass("sampler pass");
+			// {
+			// 	let mut sampler_pass = render_graph.add_pass("sampler pass");
 
-				let descriptor0 = sampler_pass.add_descriptor_set(DescriptorDesc {
-					name: "Geometry descriptor",
-					descriptor_layout: COMMON_DESC_INFO,
-					bindings: &mut [
-						(0, DescriptorBindingDesc::ImportedBuffer(&self.camera_uniform)),
-						(1, DescriptorBindingDesc::ImportedBuffer(&self.model_uniform)),
-					],
+			// 	let descriptor0 = sampler_pass.add_descriptor_set(DescriptorDesc {
+			// 		name: "Geometry descriptor",
+			// 		descriptor_layout: COMMON_DESC_INFO,
+			// 		bindings: &mut [
+			// 			(0, DescriptorBindingDesc::ImportedBuffer(&self.camera_uniform)),
+			// 			(1, DescriptorBindingDesc::ImportedBuffer(&self.model_uniform)),
+			// 		],
+			// 	});
+
+			// 	let descriptor1 = sampler_pass.add_descriptor_set(DescriptorDesc {
+			// 		name: "Sampler descriptor",
+			// 		descriptor_layout: SAMPLER_DESC_INFO,
+			// 		bindings: &mut [
+			// 			(0, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
+			// 			(1, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
+			// 		],
+			// 	});
+
+			// 	let render_pass = sampler_pass.add_output_render_pass();
+
+			// 	let pipeline = sampler_pass.add_raster_pipeline(RasterPipelineDesc {
+			// 		name: "Sampler Cube Pipeline",
+			// 		vs: &self.vs_textured,
+			// 		ps: &self.ps_textured,
+			// 		descriptor_layouts: &[COMMON_DESC_INFO, SAMPLER_DESC_INFO],
+			// 		render_pass,
+			// 		depth_write: true,
+			// 		face_cull: FaceCullMode::Back,
+			// 		push_constant_bytes: 0,
+			// 		vertex_input_info: Vertex::VERTEX_INFO,
+			// 		polygon_mode: PolygonMode::Fill,
+			// 	});
+
+			// 	sampler_pass.cmd_begin_render_pass(render_pass, &[ClearValue::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }]);
+
+			// 	sampler_pass.cmd_bind_raster_pipeline(pipeline);
+			// 	sampler_pass.cmd_bind_raster_descriptor(descriptor0, 0, pipeline);
+			// 	sampler_pass.cmd_bind_raster_descriptor(descriptor1, 1, pipeline);
+
+			// 	sampler_pass.cmd_draw_mesh(&self.cube);
+
+			// 	sampler_pass.cmd_end_render_pass();
+			// }
+			{
+				let mut post_processing_pass = render_graph.add_pass("fullscreen");
+
+				let render_pass = post_processing_pass.add_output_render_pass();
+
+				let pipeline = post_processing_pass.add_raster_pipeline(RasterPipelineDesc {
+					name: "Fullscreen Pipeline",
+					vs: &self.vs_fullscreen,
+					ps: &self.ps_fullscreen,
+					descriptor_layouts: &[FULLSCREEN_DESC_INFO],
+					render_pass,
+					depth_write: false,
+					face_cull: FaceCullMode::Front,
+					push_constant_bytes: 0,
+					vertex_input_info: EMPTY_VERTEX_INFO,
+					polygon_mode: PolygonMode::Fill,
 				});
 
-				let descriptor1 = sampler_pass.add_descriptor_set(DescriptorDesc {
-					name: "Sampler descriptor",
-					descriptor_layout: SAMPLER_DESC_INFO,
+				let descriptor0 = post_processing_pass.add_descriptor_set(DescriptorDesc {
+					name: "Fullscreen Descriptor 0",
+					descriptor_layout: FULLSCREEN_DESC_INFO,
 					bindings: &mut [
 						(0, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
 						(1, DescriptorBindingDesc::Attachment(geometry_output_attachment.read())),
 					],
 				});
 
-				let render_pass = sampler_pass.add_output_render_pass();
+				post_processing_pass.cmd_begin_render_pass(render_pass, &[ClearValue::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }]);
 
-				let pipeline = sampler_pass.add_raster_pipeline(RasterPipelineDesc {
-					name: "Sampler Cube Pipeline",
-					vs: &self.vs_textured,
-					ps: &self.ps_textured,
-					descriptor_layouts: &[COMMON_DESC_INFO, SAMPLER_DESC_INFO],
-					render_pass,
-					depth_write: true,
-					face_cull: true,
-					push_constant_bytes: 0,
-				});
+				post_processing_pass.cmd_bind_raster_pipeline(pipeline);
+				post_processing_pass.cmd_bind_raster_descriptor(descriptor0, 0, pipeline);
+				post_processing_pass.cmd_draw(3, 1, 0, 0);
 
-				sampler_pass.cmd_begin_render_pass(render_pass, &[ClearValue::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }]);
-
-				sampler_pass.cmd_bind_raster_pipeline(pipeline);
-				sampler_pass.cmd_bind_raster_descriptor(descriptor0, 0, pipeline);
-				sampler_pass.cmd_bind_raster_descriptor(descriptor1, 1, pipeline);
-
-				sampler_pass.cmd_draw_mesh(&self.cube);
-
-				sampler_pass.cmd_end_render_pass();
+				post_processing_pass.cmd_end_render_pass();
 			}
-			// {
-			// 	let mut post_processing_pass = render_graph.add_pass("post_processing");
-
-			// 	post_processing_pass.decl_read_attachment(
-			// 		color_attachment.into(),
-			// 		ImageLayout::ShaderReadOnlyOptimal,
-			// 	);
-			// 	post_processing_pass
-			// 		.decl_read_attachment(attachment_1.into(), ImageLayout::ShaderReadOnlyOptimal);
-
-			// 	let render_pass = post_processing_pass.add_output_render_pass();
-			// 	post_processing_pass.cmd_begin_render_pass(
-			// 		render_pass,
-			// 		Color {
-			// 			r: 0.0,
-			// 			g: 0.0,
-			// 			b: 0.0,
-			// 			a: 1.0,
-			// 		},
-			// 	);
-
-			// 	post_processing_pass.cmd_end_render_pass();
-			// }
 
 			render_graph.execute(graphics_context, graphics_device);
 
@@ -275,6 +300,8 @@ impl Game {
 		graphics_device.destroy_shader(self.ps);
 		graphics_device.destroy_shader(self.vs_textured);
 		graphics_device.destroy_shader(self.ps_textured);
+		graphics_device.destroy_shader(self.vs_fullscreen);
+		graphics_device.destroy_shader(self.ps_fullscreen);
 	}
 }
 
@@ -286,6 +313,9 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let vs_textured = graphics_device.create_shader(&test_sampler::VS_BYTES);
 	let ps_textured = graphics_device.create_shader(&test_sampler::PS_BYTES);
+
+	let vs_fullscreen = graphics_device.create_shader(&fullscreen::VS_BYTES);
+	let ps_fullscreen = graphics_device.create_shader(&fullscreen::PS_BYTES);
 
 	let mut upload_context = graphics_device.create_upload_context();
 
@@ -310,6 +340,8 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 		ps,
 		vs_textured,
 		ps_textured,
+		vs_fullscreen,
+		ps_fullscreen,
 		cube,
 		upload_context,
 		camera_uniform,

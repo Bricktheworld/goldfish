@@ -15,7 +15,7 @@ use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
 use swapchain::{FrameInfo, VulkanSwapchain};
 
-use crate::renderer::{ClearValue, DescriptorSetInfo, FrameId, ImageLayout};
+use crate::renderer::{ClearValue, DescriptorSetInfo, FaceCullMode, FrameId, ImageLayout, PolygonMode, VertexInputInfo};
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
@@ -37,24 +37,66 @@ pub use shader::VulkanShader;
 pub use texture::VulkanTexture;
 
 pub enum VulkanRasterCmd {
-	BindPipeline(vk::PipelineBindPoint, vk::Pipeline),
-	BindVertexBuffer(u32, vk::Buffer, vk::DeviceSize),
-	BindVertexBuffers(u32, Vec<vk::Buffer>, Vec<vk::DeviceSize>),
-	BindIndexBuffer(vk::Buffer, vk::DeviceSize, vk::IndexType),
-	SetViewport(vk::Viewport),
-	SetScissor(vk::Rect2D),
-	BeginRenderPass(vk::RenderPass, vk::Framebuffer, vk::Rect2D, Vec<vk::ClearValue>, vk::SubpassContents),
-	EndRenderPass(),
-	DrawIndexed(u32, u32, u32, i32, u32),
-	BindDescriptor(vk::PipelineBindPoint, vk::PipelineLayout, u32, vk::DescriptorSet),
-	PipelineBarrier(
-		vk::PipelineStageFlags,
-		vk::PipelineStageFlags,
-		vk::DependencyFlags,
-		Vec<vk::MemoryBarrier>,
-		Vec<vk::BufferMemoryBarrier>,
-		Vec<vk::ImageMemoryBarrier>,
-	),
+	BindPipeline {
+		bind_point: vk::PipelineBindPoint,
+		pipeline: vk::Pipeline,
+	},
+	BindVertexBuffer {
+		first_binding: u32,
+		buffer: vk::Buffer,
+		offset: vk::DeviceSize,
+	},
+	BindVertexBuffers {
+		first_binding: u32,
+		buffers: Vec<vk::Buffer>,
+		offsets: Vec<vk::DeviceSize>,
+	},
+	BindIndexBuffer {
+		buffer: vk::Buffer,
+		offset: vk::DeviceSize,
+		index_type: vk::IndexType,
+	},
+	SetViewport {
+		viewport: vk::Viewport,
+	},
+	SetScissor {
+		scissor: vk::Rect2D,
+	},
+	BeginRenderPass {
+		render_pass: vk::RenderPass,
+		framebuffer: vk::Framebuffer,
+		render_area: vk::Rect2D,
+		clear_values: Vec<vk::ClearValue>,
+		subpass_contents: vk::SubpassContents,
+	},
+	EndRenderPass {},
+	DrawIndexed {
+		index_count: u32,
+		instance_count: u32,
+		first_index: u32,
+		vertex_offset: i32,
+		first_instance: u32,
+	},
+	Draw {
+		vertex_count: u32,
+		instance_count: u32,
+		first_vertex: u32,
+		first_instance: u32,
+	},
+	BindDescriptor {
+		pipeline_bind_point: vk::PipelineBindPoint,
+		pipeline_layout: vk::PipelineLayout,
+		first_set: u32,
+		descriptor_set: vk::DescriptorSet,
+	},
+	PipelineBarrier {
+		src_stage_mask: vk::PipelineStageFlags,
+		dst_stage_mask: vk::PipelineStageFlags,
+		dependency_flags: vk::DependencyFlags,
+		memory_barriers: Vec<vk::MemoryBarrier>,
+		buffer_memory_barriers: Vec<vk::BufferMemoryBarrier>,
+		image_memory_barriers: Vec<vk::ImageMemoryBarrier>,
+	},
 	None,
 }
 
@@ -145,23 +187,29 @@ impl VulkanGraphicsContext {
 		let raw = self.raw_device();
 		self.raster_cmds.take().into_iter().for_each(|cmd| unsafe {
 			match cmd {
-				VulkanRasterCmd::BindPipeline(bind_point, pipeline) => raw.cmd_bind_pipeline(cmd_buf, bind_point, pipeline),
-				VulkanRasterCmd::BindVertexBuffer(first_binding, buffer, offset) => {
+				VulkanRasterCmd::BindPipeline { bind_point, pipeline } => raw.cmd_bind_pipeline(cmd_buf, bind_point, pipeline),
+				VulkanRasterCmd::BindVertexBuffer { first_binding, buffer, offset } => {
 					raw.cmd_bind_vertex_buffers(cmd_buf, first_binding, &[buffer], &[offset]);
 				}
-				VulkanRasterCmd::BindVertexBuffers(first_binding, buffers, offsets) => {
+				VulkanRasterCmd::BindVertexBuffers { first_binding, buffers, offsets } => {
 					raw.cmd_bind_vertex_buffers(cmd_buf, first_binding, &buffers, &offsets);
 				}
-				VulkanRasterCmd::BindIndexBuffer(buffer, offset, index_type) => {
+				VulkanRasterCmd::BindIndexBuffer { buffer, offset, index_type } => {
 					raw.cmd_bind_index_buffer(cmd_buf, buffer, offset, index_type);
 				}
-				VulkanRasterCmd::SetViewport(viewport) => {
+				VulkanRasterCmd::SetViewport { viewport } => {
 					raw.cmd_set_viewport(cmd_buf, 0, &[viewport]);
 				}
-				VulkanRasterCmd::SetScissor(scissor) => {
+				VulkanRasterCmd::SetScissor { scissor } => {
 					raw.cmd_set_scissor(cmd_buf, 0, &[scissor]);
 				}
-				VulkanRasterCmd::BeginRenderPass(render_pass, framebuffer, render_area, clear_values, subpass_contents) => {
+				VulkanRasterCmd::BeginRenderPass {
+					render_pass,
+					framebuffer,
+					render_area,
+					clear_values,
+					subpass_contents,
+				} => {
 					raw.cmd_begin_render_pass(
 						cmd_buf,
 						&vk::RenderPassBeginInfo::builder()
@@ -172,16 +220,30 @@ impl VulkanGraphicsContext {
 						subpass_contents,
 					);
 				}
-				VulkanRasterCmd::EndRenderPass() => {
+				VulkanRasterCmd::EndRenderPass {} => {
 					raw.cmd_end_render_pass(cmd_buf);
 				}
-				VulkanRasterCmd::DrawIndexed(index_count, instance_count, first_index, vertex_offset, first_instance) => {
-					raw.cmd_draw_indexed(cmd_buf, index_count, instance_count, first_index, vertex_offset, first_instance)
-				}
-				VulkanRasterCmd::BindDescriptor(pipeline_bind_point, pipeline_layout, first_set, descriptor_set) => {
-					raw.cmd_bind_descriptor_sets(cmd_buf, pipeline_bind_point, pipeline_layout, first_set, &[descriptor_set], &[])
-				}
-				VulkanRasterCmd::PipelineBarrier(src_stage_mask, dst_stage_mask, dependency_flags, memory_barriers, buffer_memory_barriers, image_memory_barriers) => raw.cmd_pipeline_barrier(
+				VulkanRasterCmd::DrawIndexed {
+					index_count,
+					instance_count,
+					first_index,
+					vertex_offset,
+					first_instance,
+				} => raw.cmd_draw_indexed(cmd_buf, index_count, instance_count, first_index, vertex_offset, first_instance),
+				VulkanRasterCmd::BindDescriptor {
+					pipeline_bind_point,
+					pipeline_layout,
+					first_set,
+					descriptor_set,
+				} => raw.cmd_bind_descriptor_sets(cmd_buf, pipeline_bind_point, pipeline_layout, first_set, &[descriptor_set], &[]),
+				VulkanRasterCmd::PipelineBarrier {
+					src_stage_mask,
+					dst_stage_mask,
+					dependency_flags,
+					memory_barriers,
+					buffer_memory_barriers,
+					image_memory_barriers,
+				} => raw.cmd_pipeline_barrier(
 					cmd_buf,
 					src_stage_mask,
 					dst_stage_mask,
@@ -190,6 +252,12 @@ impl VulkanGraphicsContext {
 					&buffer_memory_barriers,
 					&image_memory_barriers,
 				),
+				VulkanRasterCmd::Draw {
+					vertex_count,
+					instance_count,
+					first_vertex,
+					first_instance,
+				} => raw.cmd_draw(cmd_buf, vertex_count, instance_count, first_vertex, first_instance),
 				VulkanRasterCmd::None => panic!("None raster command queued!"),
 			}
 		});
@@ -198,8 +266,8 @@ impl VulkanGraphicsContext {
 	pub fn begin_output_render_pass(&self, clear_values: &[ClearValue]) {
 		tracy::span!();
 
-		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
-			vk::Viewport::builder()
+		self.queue_raster_cmd(VulkanRasterCmd::SetViewport {
+			viewport: vk::Viewport::builder()
 				.x(0.0)
 				.y(self.swapchain.extent.height as f32)
 				.width(self.swapchain.extent.width as f32)
@@ -207,27 +275,27 @@ impl VulkanGraphicsContext {
 				.min_depth(0.0)
 				.max_depth(1.0)
 				.build(),
-		));
+		});
 
-		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(
-			vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(self.swapchain.extent).build(),
-		));
+		self.queue_raster_cmd(VulkanRasterCmd::SetScissor {
+			scissor: vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(self.swapchain.extent).build(),
+		});
 
-		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass(
-			self.swapchain.render_pass,
-			self.get_output_framebuffer(),
-			vk::Rect2D {
+		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass {
+			render_pass: self.swapchain.render_pass,
+			framebuffer: self.get_output_framebuffer(),
+			render_area: vk::Rect2D {
 				offset: vk::Offset2D { x: 0, y: 0 },
 				extent: self.swapchain.extent,
 			},
-			clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
-			vk::SubpassContents::INLINE,
-		));
+			clear_values: clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
+			subpass_contents: vk::SubpassContents::INLINE,
+		});
 	}
 
 	pub fn begin_render_pass(&self, render_pass: &VulkanRenderPass, framebuffer: &VulkanFramebuffer, clear_values: &[ClearValue]) {
-		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
-			vk::Viewport::builder()
+		self.queue_raster_cmd(VulkanRasterCmd::SetViewport {
+			viewport: vk::Viewport::builder()
 				.x(0.0)
 				.y(framebuffer.height as f32)
 				.width(framebuffer.width as f32)
@@ -235,29 +303,31 @@ impl VulkanGraphicsContext {
 				.min_depth(0.0)
 				.max_depth(1.0)
 				.build(),
-		));
+		});
 
 		let extent = vk::Extent2D {
 			width: framebuffer.width,
 			height: framebuffer.height,
 		};
 
-		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(extent).build()));
+		self.queue_raster_cmd(VulkanRasterCmd::SetScissor {
+			scissor: vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(extent).build(),
+		});
 
-		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass(
-			render_pass.raw,
-			framebuffer.raw,
-			vk::Rect2D {
+		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass {
+			render_pass: render_pass.raw,
+			framebuffer: framebuffer.raw,
+			render_area: vk::Rect2D {
 				offset: vk::Offset2D { x: 0, y: 0 },
 				extent,
 			},
-			clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
-			vk::SubpassContents::INLINE,
-		));
+			clear_values: clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
+			subpass_contents: vk::SubpassContents::INLINE,
+		});
 	}
 
 	pub fn end_render_pass(&self) {
-		self.queue_raster_cmd(VulkanRasterCmd::EndRenderPass());
+		self.queue_raster_cmd(VulkanRasterCmd::EndRenderPass {});
 	}
 
 	fn get_output_framebuffer(&self) -> vk::Framebuffer {
@@ -276,28 +346,60 @@ impl VulkanGraphicsContext {
 	pub fn destroy(&mut self) {
 		self.swapchain.destroy();
 	}
-
 	pub fn create_raster_pipeline(
 		&mut self,
 		vs: &VulkanShader,
 		ps: &VulkanShader,
 		descriptor_layouts: &[VulkanDescriptorLayout],
 		depth_write: bool,
-		face_cull: bool,
+		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
+		vertex_input_info: VertexInputInfo,
+		polygon_mode: PolygonMode,
 	) -> VulkanPipeline {
-		self.swapchain.create_raster_pipeline(vs, ps, descriptor_layouts, depth_write, face_cull, push_constant_bytes)
+		self.swapchain.device.create_raster_pipeline_impl(
+			vs,
+			ps,
+			descriptor_layouts,
+			self.swapchain.render_pass,
+			1usize,
+			depth_write,
+			face_cull,
+			push_constant_bytes,
+			vertex_input_info,
+			polygon_mode,
+		)
 	}
 
 	pub fn draw_indexed(&self, index_count: u32) {
-		self.queue_raster_cmd(VulkanRasterCmd::DrawIndexed(index_count, 1, 0, 0, 0));
+		self.queue_raster_cmd(VulkanRasterCmd::DrawIndexed {
+			index_count,
+			instance_count: 1,
+			first_index: 0,
+			vertex_offset: 0,
+			first_instance: 0,
+		});
+	}
+
+	pub fn draw(&self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) {
+		self.queue_raster_cmd(VulkanRasterCmd::Draw {
+			vertex_count,
+			instance_count,
+			first_vertex,
+			first_instance,
+		});
 	}
 
 	pub fn bind_descriptor(&self, descriptor_heap: &VulkanDescriptorHeap, descriptor_set: &VulkanDescriptorHandle, set: u32, pipeline: &VulkanPipeline) {
 		let frame = self.current_frame_info.as_ref().expect("begin_frame was not called!").frame_index;
 
 		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
-		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor(vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline_layout, set, descriptor));
+		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor {
+			pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
+			pipeline_layout: pipeline.pipeline_layout,
+			first_set: set,
+			descriptor_set: descriptor,
+		});
 	}
 
 	pub fn update_descriptor(
@@ -363,14 +465,14 @@ impl VulkanGraphicsContext {
 		buffer_memory_barriers: &[vk::BufferMemoryBarrier],
 		image_memory_barriers: &[vk::ImageMemoryBarrier],
 	) {
-		self.queue_raster_cmd(VulkanRasterCmd::PipelineBarrier(
+		self.queue_raster_cmd(VulkanRasterCmd::PipelineBarrier {
 			src_stage_mask,
 			dst_stage_mask,
 			dependency_flags,
-			memory_barriers.to_vec(),
-			buffer_memory_barriers.to_vec(),
-			image_memory_barriers.to_vec(),
-		))
+			memory_barriers: memory_barriers.to_vec(),
+			buffer_memory_barriers: buffer_memory_barriers.to_vec(),
+			image_memory_barriers: image_memory_barriers.to_vec(),
+		})
 	}
 }
 

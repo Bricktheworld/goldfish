@@ -78,6 +78,77 @@ pub enum ImageLayout {
 	TransferDstOptimal,
 }
 
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum FaceCullMode {
+	Front,
+	Back,
+	FrontAndBack,
+	NoCull,
+}
+
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum PolygonMode {
+	Fill,
+	Line,
+	Point,
+}
+
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum VertexAttributeFormat {
+	F32,
+	F32Vec2,
+	F32Vec3,
+	F32Vec4,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct VertexAttributeDescriptionBinding {
+	pub location: u32,
+	pub format: VertexAttributeFormat,
+	pub offset: u32,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct VertexInputInfo {
+	pub bindings: &'static [VertexAttributeDescriptionBinding],
+	pub stride: u32,
+}
+
+impl Vertex {
+	pub const VERTEX_INFO: VertexInputInfo = VertexInputInfo {
+		bindings: &[
+			VertexAttributeDescriptionBinding {
+				location: 0,
+				format: VertexAttributeFormat::F32Vec3,
+				offset: memoffset::offset_of!(Self, position) as u32,
+			},
+			VertexAttributeDescriptionBinding {
+				location: 1,
+				format: VertexAttributeFormat::F32Vec3,
+				offset: memoffset::offset_of!(Self, normal) as u32,
+			},
+			VertexAttributeDescriptionBinding {
+				location: 2,
+				format: VertexAttributeFormat::F32Vec2,
+				offset: memoffset::offset_of!(Self, uv) as u32,
+			},
+			VertexAttributeDescriptionBinding {
+				location: 3,
+				format: VertexAttributeFormat::F32Vec3,
+				offset: memoffset::offset_of!(Self, tangent) as u32,
+			},
+			VertexAttributeDescriptionBinding {
+				location: 4,
+				format: VertexAttributeFormat::F32Vec3,
+				offset: memoffset::offset_of!(Self, bitangent) as u32,
+			},
+		],
+		stride: std::mem::size_of::<Self>() as u32,
+	};
+}
+
+pub const EMPTY_VERTEX_INFO: VertexInputInfo = VertexInputInfo { bindings: &[], stride: 0 };
+
 impl TextureFormat {
 	pub fn is_cubemap(&self) -> bool {
 		return (*self == TextureFormat::CubemapRGB8)
@@ -157,15 +228,6 @@ pub enum DescriptorBindingType {
 pub struct DescriptorSetInfo {
 	pub bindings: phf::Map<u32, DescriptorBindingType>,
 }
-
-// impl DescriptorSetInfo {
-// 	pub fn merge(self, other: DescriptorSetInfo) -> Self {
-// 		let bindings = im::hashmap::HashMap::from_iter(
-// 			self.bindings.into_iter().chain(other.bindings.into_iter()),
-// 		);
-// 		Self { bindings }
-// 	}
-// }
 
 use crate::types::{Vec2Serde, Vec3Serde};
 #[repr(C)]

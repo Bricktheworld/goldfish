@@ -19,6 +19,12 @@ pub enum PassCmd {
 	DrawMesh {
 		mesh: GraphImportedMeshHandle,
 	},
+	Draw {
+		vertex_count: u32,
+		instance_count: u32,
+		first_vertex: u32,
+		first_instance: u32,
+	},
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -87,8 +93,10 @@ struct RasterPipelineCacheKey {
 	descriptor_layouts: Vec<DescriptorLayout>,
 	render_pass: usize,
 	depth_write: bool,
-	face_cull: bool,
+	face_cull: FaceCullMode,
 	push_constant_bytes: usize,
+	vertex_input_info: VertexInputInfo,
+	polygon_mode: PolygonMode,
 }
 
 #[derive(Default)]
@@ -193,6 +201,8 @@ impl RenderGraphCache {
 					key.depth_write,
 					key.face_cull,
 					key.push_constant_bytes,
+					key.vertex_input_info,
+					key.polygon_mode,
 				)
 			} else {
 				graphics_device.create_raster_pipeline(
@@ -203,6 +213,8 @@ impl RenderGraphCache {
 					key.depth_write,
 					key.face_cull,
 					key.push_constant_bytes,
+					key.vertex_input_info,
+					key.polygon_mode,
 				)
 			});
 
@@ -305,8 +317,10 @@ pub struct RasterPipelineDesc<'a, 'b> {
 	pub descriptor_layouts: &'b [&'static DescriptorSetInfo],
 	pub render_pass: GraphRenderPassHandle,
 	pub depth_write: bool,
-	pub face_cull: bool,
+	pub face_cull: FaceCullMode,
 	pub push_constant_bytes: usize,
+	pub vertex_input_info: VertexInputInfo,
+	pub polygon_mode: PolygonMode,
 }
 
 pub enum DescriptorBindingDesc<'a, 'b> {
@@ -369,8 +383,10 @@ enum GraphOwnedResource {
 		descriptor_layouts: Vec<&'static DescriptorSetInfo>,
 		render_pass: GraphRenderPassHandle,
 		depth_write: bool,
-		face_cull: bool,
+		face_cull: FaceCullMode,
 		push_constant_bytes: usize,
+		vertex_input_info: VertexInputInfo,
+		polygon_mode: PolygonMode,
 	},
 	RenderPass {
 		name: &'static str,
@@ -612,10 +628,7 @@ impl GraphPhysicalResourceMap {
 										},
 										_ => unreachable!("Invalid texture handle!"),
 									},
-									GraphOwnedResourceDescriptorBinding::OwnedBuffer(buffer) => {
-										unimplemented!()
-										// DescriptorHeapCacheKeyBinding::OwnedBuffer { buffer: buffer.id }
-									}
+									GraphOwnedResourceDescriptorBinding::OwnedBuffer(_) => unimplemented!(),
 									GraphOwnedResourceDescriptorBinding::Attachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
 										attachment: attachment_map.get_physical(attachment.id),
 									},
@@ -793,6 +806,8 @@ impl GraphPhysicalResourceMap {
 					depth_write,
 					face_cull,
 					push_constant_bytes,
+					vertex_input_info,
+					polygon_mode,
 					..
 				} => {
 					// TODO(Brandon): Definitely don't do it like this, this is a hack to get the raw pointer
@@ -816,11 +831,13 @@ impl GraphPhysicalResourceMap {
 					let key = RasterPipelineCacheKey {
 						vs,
 						ps,
+						render_pass,
+						descriptor_layouts,
 						depth_write: *depth_write,
 						face_cull: *face_cull,
 						push_constant_bytes: *push_constant_bytes,
-						render_pass,
-						descriptor_layouts,
+						vertex_input_info: *vertex_input_info,
+						polygon_mode: *polygon_mode,
 					};
 
 					let pipeline = graph.cache.alloc_raster_pipeline(graphics_context, graphics_device, &key);
@@ -946,6 +963,12 @@ impl<'a> RenderGraph<'a> {
 						GraphImportedResource::Mesh(mesh) => graphics_context.draw_mesh(mesh),
 						_ => unreachable!("Invalid mesh!"),
 					},
+					&PassCmd::Draw {
+						vertex_count,
+						instance_count,
+						first_vertex,
+						first_instance,
+					} => graphics_context.draw(vertex_count, instance_count, first_vertex, first_instance),
 				}
 			}
 		}
@@ -1029,6 +1052,8 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		let depth_write = desc.depth_write;
 		let face_cull = desc.face_cull;
 		let push_constant_bytes = desc.push_constant_bytes;
+		let vertex_input_info = desc.vertex_input_info;
+		let polygon_mode = desc.polygon_mode;
 
 		let id = self.graph.create_resource(
 			self.pass,
@@ -1041,6 +1066,8 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 				depth_write,
 				face_cull,
 				push_constant_bytes,
+				vertex_input_info,
+				polygon_mode,
 			},
 		);
 
@@ -1153,6 +1180,16 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 
 		let recorded = self.recorded.as_mut().unwrap();
 		recorded.cmds.push(PassCmd::DrawMesh { mesh });
+	}
+
+	pub fn cmd_draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.cmds.push(PassCmd::Draw {
+			vertex_count,
+			instance_count,
+			first_vertex,
+			first_instance,
+		});
 	}
 
 	pub fn cmd_end_render_pass(&mut self) {

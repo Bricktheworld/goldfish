@@ -73,16 +73,14 @@ impl Window {
 					})
 				}
 				Event::WindowEvent {
-					event:
-						WindowEvent::KeyboardInput {
-							input: winit::event::KeyboardInput {
-								virtual_keycode: Some(keycode),
-								state,
-								scancode,
-								..
-							},
+					event: WindowEvent::KeyboardInput {
+						input: winit::event::KeyboardInput {
+							virtual_keycode: Some(keycode),
+							state,
 							..
 						},
+						..
+					},
 					..
 				} => {
 					keys[keycode as usize] = match state {
