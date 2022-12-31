@@ -50,10 +50,7 @@ impl<'a> DxcIncludeHandler for ShaderIncludeHandler<'a> {
 				Some(content)
 			}
 			Err(_) => {
-				println!(
-					"Failed to find included file {}",
-					full_path.to_str().unwrap()
-				);
+				println!("Failed to find included file {}", full_path.to_str().unwrap());
 				None
 			}
 		}
@@ -66,26 +63,13 @@ struct CompiledShaders {
 	cs: Option<Vec<u32>>,
 }
 
-fn compile_hlsl(
-	path: &Path,
-	src: &str,
-	disable_optimizations: bool,
-) -> Result<(Vec<spirv::Ast<hlsl::Target>>, CompiledShaders), BuildError> {
-	let dxc = Dxc::new(None)
-		.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
+fn compile_hlsl(path: &Path, src: &str, disable_optimizations: bool) -> Result<(Vec<spirv::Ast<hlsl::Target>>, CompiledShaders), BuildError> {
+	let dxc = Dxc::new(None).map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
 
-	let compiler = dxc
-		.create_compiler()
-		.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
-	let library = dxc
-		.create_library()
-		.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
+	let compiler = dxc.create_compiler().map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
+	let library = dxc.create_library().map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
 
-	let compile = |entry_point: &str,
-	               target_profile: &str,
-	               args: &[&str],
-	               defines: &[(&str, Option<&str>)]|
-	 -> Result<Vec<u32>, BuildError> {
+	let compile = |entry_point: &str, target_profile: &str, args: &[&str], defines: &[(&str, Option<&str>)]| -> Result<Vec<u32>, BuildError> {
 		let blob = library
 			.create_blob_with_encoding_from_str(src)
 			.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
@@ -104,25 +88,18 @@ fn compile_hlsl(
 
 		match result {
 			Err(result) => {
-				let error_blob = result
-					.0
-					.get_error_buffer()
-					.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
+				let error_blob = result.0.get_error_buffer().map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
 				Err(BuildError::ShaderCompilation(
 					path.to_path_buf(),
 					HassleError::CompileError(
 						library
 							.get_blob_as_string(&error_blob.into())
-							.map_err(move |err| {
-								BuildError::ShaderCompilation(path.to_path_buf(), err)
-							})?,
+							.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?,
 					),
 				))
 			}
 			Ok(result) => {
-				let result_blob = result
-					.get_result()
-					.map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
+				let result_blob = result.get_result().map_err(move |err| BuildError::ShaderCompilation(path.to_path_buf(), err))?;
 
 				Ok(result_blob.to_vec())
 			}
@@ -134,18 +111,13 @@ fn compile_hlsl(
 	let spirv_default = ["-spirv"];
 	let spirv_no_optimize = ["-spirv", "-Od"];
 
-	let config: &[&str] = if disable_optimizations {
-		&spirv_no_optimize
-	} else {
-		&spirv_default
-	};
+	let config: &[&str] = if disable_optimizations { &spirv_no_optimize } else { &spirv_default };
 
 	let vs = if src.contains(VS_MAIN) {
 		let vs_ir = compile(VS_MAIN, "vs_6_0", config, &[])?;
 
 		let module = spirv::Module::from_words(&vs_ir);
-		let ast = spirv::Ast::<hlsl::Target>::parse(&module)
-			.map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
+		let ast = spirv::Ast::<hlsl::Target>::parse(&module).map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
 		asts.push(ast);
 		Some(vs_ir)
 	} else {
@@ -156,8 +128,7 @@ fn compile_hlsl(
 		let ps_ir = compile(PS_MAIN, "ps_6_0", config, &[])?;
 
 		let module = spirv::Module::from_words(&ps_ir);
-		let ast = spirv::Ast::<hlsl::Target>::parse(&module)
-			.map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
+		let ast = spirv::Ast::<hlsl::Target>::parse(&module).map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
 		asts.push(ast);
 		Some(ps_ir)
 	} else {
@@ -179,36 +150,12 @@ enum MemberType {
 impl From<Type> for MemberType {
 	fn from(ty: Type) -> Self {
 		match ty {
-			Type::Float {
-				vecsize: 1,
-				columns: 0,
-				..
-			} => MemberType::F32,
-			Type::Float {
-				vecsize: 2,
-				columns: 1,
-				..
-			} => MemberType::Vec2,
-			Type::Float {
-				vecsize: 3,
-				columns: 1,
-				..
-			} => MemberType::Vec3,
-			Type::Float {
-				vecsize: 4,
-				columns: 1,
-				..
-			} => MemberType::Vec4,
-			Type::Float {
-				vecsize: 3,
-				columns: 3,
-				..
-			} => MemberType::Mat3,
-			Type::Float {
-				vecsize: 4,
-				columns: 4,
-				..
-			} => MemberType::Mat4,
+			Type::Float { vecsize: 1, columns: 0, .. } => MemberType::F32,
+			Type::Float { vecsize: 2, columns: 1, .. } => MemberType::Vec2,
+			Type::Float { vecsize: 3, columns: 1, .. } => MemberType::Vec3,
+			Type::Float { vecsize: 4, columns: 1, .. } => MemberType::Vec4,
+			Type::Float { vecsize: 3, columns: 3, .. } => MemberType::Mat3,
+			Type::Float { vecsize: 4, columns: 4, .. } => MemberType::Mat4,
 			_ => unimplemented!("Unimplemented type {:?}", ty),
 		}
 	}
@@ -246,11 +193,7 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 			let ty_name = ast.get_name(resource.base_type_id).unwrap();
 			let name = ast.get_name(resource.id).unwrap();
 
-			let ty_name = if let Some(last) = ty_name.rfind(".") {
-				ty_name[last + 1..].to_owned()
-			} else {
-				ty_name
-			};
+			let ty_name = if let Some(last) = ty_name.rfind(".") { ty_name[last + 1..].to_owned() } else { ty_name };
 
 			let resource_type = ast.get_type(resource.base_type_id).unwrap();
 			let size = ast.get_declared_struct_size(resource.base_type_id).unwrap();
@@ -266,72 +209,40 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 				.iter()
 				.enumerate()
 				.map(|(i, id)| StructMember {
-					name: ast
-						.get_member_name(resource.base_type_id, i as u32)
-						.unwrap(),
+					name: ast.get_member_name(resource.base_type_id, i as u32).unwrap(),
 					ty: ast.get_type(*id).unwrap().into(),
-					offset: ast
-						.get_member_decoration(resource.base_type_id, i as u32, Decoration::Offset)
-						.unwrap(),
+					offset: ast.get_member_decoration(resource.base_type_id, i as u32, Decoration::Offset).unwrap(),
 				})
 				.collect::<Vec<_>>();
 
-			let set = ast
-				.get_decoration(resource.id, Decoration::DescriptorSet)
-				.unwrap();
+			let set = ast.get_decoration(resource.id, Decoration::DescriptorSet).unwrap();
 
-			let binding = ast
-				.get_decoration(resource.id, Decoration::Binding)
-				.unwrap();
+			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors
-				.entry(set)
-				.or_default()
-				.entry(binding)
-				.or_insert(DescriptorBinding::UniformBuffer {
-					name,
-					struct_info: Struct {
-						ty_name,
-						members,
-						size,
-					},
-				});
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::UniformBuffer {
+				name,
+				struct_info: Struct { ty_name, members, size },
+			});
 		}
 
 		for resource in resources.separate_samplers {
 			let name = resource.name;
 
-			let set = ast
-				.get_decoration(resource.id, Decoration::DescriptorSet)
-				.unwrap();
+			let set = ast.get_decoration(resource.id, Decoration::DescriptorSet).unwrap();
 
-			let binding = ast
-				.get_decoration(resource.id, Decoration::Binding)
-				.unwrap();
+			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors
-				.entry(set)
-				.or_default()
-				.entry(binding)
-				.or_insert(DescriptorBinding::Sampler { name });
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::Sampler { name });
 		}
 
 		for resource in resources.separate_images {
 			let name = resource.name;
 
-			let set = ast
-				.get_decoration(resource.id, Decoration::DescriptorSet)
-				.unwrap();
+			let set = ast.get_decoration(resource.id, Decoration::DescriptorSet).unwrap();
 
-			let binding = ast
-				.get_decoration(resource.id, Decoration::Binding)
-				.unwrap();
+			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors
-				.entry(set)
-				.or_default()
-				.entry(binding)
-				.or_insert(DescriptorBinding::SampledImage { name });
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::SampledImage { name });
 		}
 	}
 	return descriptors;
@@ -351,13 +262,9 @@ fn parse_shader_includes(asset_dir: &Path) -> Result<HashMap<String, DescriptorS
 				continue;
 			}
 
-			println!(
-				"cargo:warning=Parsing shader include {} ...",
-				asset_path.to_str().unwrap()
-			);
+			println!("cargo:warning=Parsing shader include {} ...", asset_path.to_str().unwrap());
 
-			let mut src =
-				fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
+			let mut src = fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
 
 			if src.contains("#include") {
 				unimplemented!("Cannot have nested includes, as this would require a dependency tree which is not implemented...");
@@ -380,10 +287,7 @@ __VS_OUTPUT__ vs_main(float3 pos : POSITION)
 				let (mut asts, _) = compile_hlsl(&asset_path, &src, true)?;
 				let descriptors = generate_descriptors(&mut asts);
 
-				descriptor_layouts.insert(
-					asset_path.file_stem().unwrap().to_str().unwrap().to_owned(),
-					descriptors,
-				);
+				descriptor_layouts.insert(asset_path.file_stem().unwrap().to_str().unwrap().to_owned(), descriptors);
 			}
 		}
 	}
@@ -405,14 +309,14 @@ pub struct Descriptor{0} {{
 				"pub {}: {},\n",
 				match info {
 					DescriptorBinding::UniformBuffer { name, .. } => name,
-					_ => unimplemented!(),
+					DescriptorBinding::Sampler { name } => name,
+					DescriptorBinding::SampledImage { name } => name,
 				},
 				match info {
 					DescriptorBinding::UniformBuffer {
-						struct_info: Struct { ty_name, .. },
-						..
+						struct_info: Struct { ty_name, .. }, ..
 					} => ty_name,
-					_ => unimplemented!(),
+					_ => "u32",
 				},
 			))
 			.collect::<String>(),
@@ -474,11 +378,7 @@ output[{1}..{1} + slice.len()].clone_from_slice(slice);
 	)
 }
 
-fn compile_shaders(
-	out_dir: &Path,
-	asset_dir: &Path,
-	descriptor_layouts: &HashMap<String, DescriptorSets>,
-) -> Result<String, BuildError> {
+fn compile_shaders(out_dir: &Path, asset_dir: &Path, descriptor_layouts: &HashMap<String, DescriptorSets>) -> Result<String, BuildError> {
 	let mut generated = String::default();
 	for asset in fs::read_dir(asset_dir).map_err(move |err| BuildError::Filesystem(err))? {
 		let asset = asset.map_err(move |err| BuildError::Filesystem(err))?;
@@ -491,26 +391,17 @@ fn compile_shaders(
 				continue;
 			}
 
-			println!(
-				"cargo:warning=Compiling {} ...",
-				asset_path.to_str().unwrap()
-			);
+			println!("cargo:warning=Compiling {} ...", asset_path.to_str().unwrap());
 
-			let src =
-				fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
+			let src = fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
 
 			let (mut asts, compiled_shaders) = compile_hlsl(&asset_path, &src, false)?;
 
 			let mut shader_ir_consts = String::default();
 			if let Some(ref vs) = compiled_shaders.vs {
-				let bytes = vs
-					.iter()
-					.flat_map(|code| code.to_ne_bytes())
-					.collect::<Vec<_>>();
+				let bytes = vs.iter().flat_map(|code| code.to_ne_bytes()).collect::<Vec<_>>();
 
-				let out = out_dir
-					.join(asset_path.file_name().unwrap())
-					.with_extension("vs");
+				let out = out_dir.join(asset_path.file_name().unwrap()).with_extension("vs");
 
 				std::fs::write(&out, bytes).map_err(move |err| BuildError::Filesystem(err))?;
 
@@ -521,14 +412,9 @@ fn compile_shaders(
 			}
 
 			if let Some(ref ps) = compiled_shaders.ps {
-				let bytes = ps
-					.iter()
-					.flat_map(|code| code.to_ne_bytes())
-					.collect::<Vec<_>>();
+				let bytes = ps.iter().flat_map(|code| code.to_ne_bytes()).collect::<Vec<_>>();
 
-				let out = out_dir
-					.join(asset_path.file_name().unwrap())
-					.with_extension("ps");
+				let out = out_dir.join(asset_path.file_name().unwrap()).with_extension("ps");
 				std::fs::write(&out, bytes).map_err(move |err| BuildError::Filesystem(err))?;
 
 				shader_ir_consts += &format!(
@@ -544,9 +430,7 @@ fn compile_shaders(
 				.flat_map(|(include, sets)| {
 					if src.contains(&format!("#include \"{}.hlsli\"", include)) {
 						sets.iter()
-							.map(|(set, _)| {
-								(*set, format!("super::{}_inc::Descriptor{}", include, *set))
-							})
+							.map(|(set, _)| (*set, format!("super::{}_inc::Descriptor{}", include, *set)))
 							.collect::<Vec<(u32, String)>>()
 					} else {
 						Default::default()
@@ -559,18 +443,13 @@ fn compile_shaders(
 
 			for (set, bindings) in descriptors {
 				if let Some(descriptor_type) = included_sets.get(&set) {
-					descriptor_decls.push(format!(
-						"\npub type Descriptor{} = {};\n",
-						set, descriptor_type
-					));
+					descriptor_decls.push(format!("\npub type Descriptor{} = {};\n", set, descriptor_type));
 				} else {
 					uniform_decls.append(
 						&mut bindings
 							.iter()
 							.flat_map(|(_, info)| match info {
-								DescriptorBinding::UniformBuffer { struct_info, .. } => {
-									Some(struct_info.clone())
-								}
+								DescriptorBinding::UniformBuffer { struct_info, .. } => Some(struct_info.clone()),
 								_ => None,
 							})
 							.collect(),
@@ -594,10 +473,7 @@ pub mod {} {{
 				asset_path.file_stem().unwrap().to_str().unwrap(),
 				&shader_ir_consts,
 				descriptor_decls.join(""),
-				uniform_decls
-					.iter()
-					.map(|struct_info| generate_struct_rust(struct_info))
-					.collect::<String>(),
+				uniform_decls.iter().map(|struct_info| generate_struct_rust(struct_info)).collect::<String>(),
 			);
 		}
 	}
@@ -606,10 +482,7 @@ pub mod {} {{
 
 fn main() {
 	let out_dir = &env::var_os("OUT_DIR").unwrap();
-	println!(
-		"cargo:warning=Running build script, output dir {}",
-		out_dir.to_str().unwrap()
-	);
+	println!("cargo:warning=Running build script, output dir {}", out_dir.to_str().unwrap());
 
 	match parse_shader_includes(&Path::new(SHADERS_DIR)) {
 		Err(err) => panic!("Failed to parse shader includes! {}", err),
@@ -619,9 +492,7 @@ fn main() {
 				.flat_map(|(_, sets)| {
 					sets.iter().flat_map(|(_, bindings)| {
 						bindings.iter().map(|(_, info)| match info {
-							DescriptorBinding::UniformBuffer { struct_info, .. } => {
-								Some(struct_info)
-							}
+							DescriptorBinding::UniformBuffer { struct_info, .. } => Some(struct_info),
 							_ => None,
 						})
 					})
@@ -639,29 +510,19 @@ pub mod {}_inc {{
 {}
 }}",
 						module,
-						sets.iter()
-							.map(|(set, bindings)| generate_descriptor_rust(*set, bindings))
-							.collect::<String>(),
-						uniform_decls
-							.iter()
-							.map(|struct_info| generate_struct_rust(struct_info))
-							.collect::<String>(),
+						sets.iter().map(|(set, bindings)| generate_descriptor_rust(*set, bindings)).collect::<String>(),
+						uniform_decls.iter().map(|struct_info| generate_struct_rust(struct_info)).collect::<String>(),
 					)
 				})
 				.collect::<String>();
 
-			match compile_shaders(
-				Path::new(&out_dir),
-				Path::new(SHADERS_DIR),
-				&descriptor_layouts,
-			) {
+			match compile_shaders(Path::new(&out_dir), Path::new(SHADERS_DIR), &descriptor_layouts) {
 				Err(err) => panic!("Failed to compile shaders! {}", err),
 				Ok(generated) => {
 					println!("cargo:warning=Successfully compiled shaders!");
 
 					let dst_path = Path::new(&out_dir).join("materials.rs");
-					std::fs::write(&dst_path, &(includes_generated + &generated))
-						.expect("Failed to write generated materials!");
+					std::fs::write(&dst_path, &(includes_generated + &generated)).expect("Failed to write generated materials!");
 				}
 			}
 		}

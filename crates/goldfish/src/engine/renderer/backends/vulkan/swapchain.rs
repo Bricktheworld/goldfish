@@ -33,8 +33,7 @@ impl VulkanSwapchain {
 	pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 	pub fn new(framebuffer_size: Size, device: VulkanDevice) -> Self {
-		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
-			Self::init_swapchain(framebuffer_size, &device);
+		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) = Self::init_swapchain(framebuffer_size, &device);
 		let mut frames = Vec::with_capacity(Self::MAX_FRAMES_IN_FLIGHT);
 
 		for _ in 0..Self::MAX_FRAMES_IN_FLIGHT {
@@ -64,10 +63,7 @@ impl VulkanSwapchain {
 	pub fn acquire(&mut self) -> Result<FrameInfo, SwapchainError> {
 		let mut guard = self.device.frame.lock().unwrap();
 		let current_frame = guard.frame as usize;
-		assert!(
-			current_frame < Self::MAX_FRAMES_IN_FLIGHT,
-			"Invalid swapchain current frame!"
-		);
+		assert!(current_frame < Self::MAX_FRAMES_IN_FLIGHT, "Invalid swapchain current frame!");
 		tracy::span!();
 
 		// Get the current frame that we are processing
@@ -83,19 +79,9 @@ impl VulkanSwapchain {
 
 		guard.destructors[current_frame].clear();
 
-		match unsafe {
-			self.swapchain_loader.acquire_next_image(
-				self.swapchain,
-				u64::MAX,
-				frame.acquired_sem.raw,
-				vk::Fence::null(),
-			)
-		} {
+		match unsafe { self.swapchain_loader.acquire_next_image(self.swapchain, u64::MAX, frame.acquired_sem.raw, vk::Fence::null()) } {
 			Ok((image_index, false)) => {
-				assert!(
-					image_index < self.images.len() as u32,
-					"Invalid image index received!"
-				);
+				assert!(image_index < self.images.len() as u32, "Invalid image index received!");
 
 				let image = &mut self.images[image_index as usize];
 
@@ -105,12 +91,8 @@ impl VulkanSwapchain {
 
 				image.available_fence = Some(Rc::clone(&frame.completed_fence));
 
-				self.frames[current_frame]
-					.command_pool
-					.recycle(&self.device);
-				let command_buffer = self.frames[current_frame]
-					.command_pool
-					.begin_command_buffer(&self.device);
+				self.frames[current_frame].command_pool.recycle(&self.device);
+				let command_buffer = self.frames[current_frame].command_pool.begin_command_buffer(&self.device);
 
 				Ok(FrameInfo {
 					image_index,
@@ -124,18 +106,12 @@ impl VulkanSwapchain {
 		}
 	}
 
-	pub fn submit(
-		&mut self,
-		image_index: u32,
-		command_buffer: VulkanCommandBuffer,
-	) -> Result<(), SwapchainError> {
+	pub fn submit(&mut self, image_index: u32, command_buffer: VulkanCommandBuffer) -> Result<(), SwapchainError> {
 		tracy::span!();
 		let mut guard = self.device.frame.lock().unwrap();
 		let current_frame = guard.frame as usize;
 
-		self.frames[current_frame]
-			.command_pool
-			.end_command_buffer(&self.device, command_buffer);
+		self.frames[current_frame].command_pool.end_command_buffer(&self.device, command_buffer);
 		let frame = &self.frames[current_frame];
 
 		let acquired_sem = &frame.acquired_sem;
@@ -173,15 +149,9 @@ impl VulkanSwapchain {
 			)
 		} {
 			Ok(suboptimal) => {
-				return if suboptimal {
-					Err(SwapchainError::SubmitSuboptimal)
-				} else {
-					Ok(())
-				};
+				return if suboptimal { Err(SwapchainError::SubmitSuboptimal) } else { Ok(()) };
 			}
-			Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-				Err(SwapchainError::SubmitSuboptimal)
-			}
+			Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => Err(SwapchainError::SubmitSuboptimal),
 			Err(_) => {
 				panic!("Failed to present swapchain images!");
 			}
@@ -194,8 +164,7 @@ impl VulkanSwapchain {
 
 		self.destroy_swapchain();
 
-		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) =
-			Self::init_swapchain(framebuffer_size, &self.device);
+		let (image_format, extent, swapchain_loader, swapchain, render_pass, images) = Self::init_swapchain(framebuffer_size, &self.device);
 
 		self.image_format = image_format;
 		self.extent = extent;
@@ -215,22 +184,11 @@ impl VulkanSwapchain {
 
 			self.device.raw.destroy_render_pass(self.render_pass, None);
 
-			self.swapchain_loader
-				.destroy_swapchain(self.swapchain, None);
+			self.swapchain_loader.destroy_swapchain(self.swapchain, None);
 		}
 	}
 
-	fn init_swapchain(
-		framebuffer_size: Size,
-		device: &VulkanDevice,
-	) -> (
-		vk::Format,
-		vk::Extent2D,
-		Swapchain,
-		vk::SwapchainKHR,
-		vk::RenderPass,
-		Vec<SwapchainImage>,
-	) {
+	fn init_swapchain(framebuffer_size: Size, device: &VulkanDevice) -> (vk::Format, vk::Extent2D, Swapchain, vk::SwapchainKHR, vk::RenderPass, Vec<SwapchainImage>) {
 		tracy::span!();
 		let swapchain_details = device.query_swapchain_details();
 
@@ -239,11 +197,7 @@ impl VulkanSwapchain {
 		let surface_format = swapchain_details
 			.surface_formats
 			.iter()
-			.find(|&format| {
-				(format.format == vk::Format::R8G8B8A8_UNORM
-					|| format.format == vk::Format::B8G8R8A8_UNORM)
-					&& format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-			})
+			.find(|&format| (format.format == vk::Format::R8G8B8A8_UNORM || format.format == vk::Format::B8G8R8A8_UNORM) && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
 			.expect("No surface formats found!");
 
 		let present_mode = swapchain_details
@@ -257,14 +211,8 @@ impl VulkanSwapchain {
 			capabilities.current_extent
 		} else {
 			vk::Extent2D {
-				width: framebuffer_size.width.clamp(
-					capabilities.min_image_extent.width,
-					capabilities.max_image_extent.width,
-				),
-				height: framebuffer_size.height.clamp(
-					capabilities.min_image_extent.height,
-					capabilities.max_image_extent.height,
-				),
+				width: framebuffer_size.width.clamp(capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+				height: framebuffer_size.height.clamp(capabilities.min_image_extent.height, capabilities.max_image_extent.height),
 			}
 		};
 
@@ -287,13 +235,9 @@ impl VulkanSwapchain {
 		let queue_family_indices = [queue_indices.graphics_family, queue_indices.present_family];
 
 		if queue_indices.graphics_family != queue_indices.present_family {
-			create_info = create_info
-				.image_sharing_mode(vk::SharingMode::CONCURRENT)
-				.queue_family_indices(&queue_family_indices);
+			create_info = create_info.image_sharing_mode(vk::SharingMode::CONCURRENT).queue_family_indices(&queue_family_indices);
 		} else {
-			create_info = create_info
-				.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-				.queue_family_indices(&[]);
+			create_info = create_info.image_sharing_mode(vk::SharingMode::EXCLUSIVE).queue_family_indices(&[]);
 		}
 
 		create_info = create_info
@@ -302,11 +246,7 @@ impl VulkanSwapchain {
 			.present_mode(present_mode)
 			.clipped(true);
 
-		let swapchain = unsafe {
-			swapchain_loader
-				.create_swapchain(&create_info, None)
-				.expect("Failed to create swapchain")
-		};
+		let swapchain = unsafe { swapchain_loader.create_swapchain(&create_info, None).expect("Failed to create swapchain") };
 
 		let image_format = surface_format.format;
 
@@ -327,10 +267,7 @@ impl VulkanSwapchain {
 							.build()])
 						.subpasses(&[vk::SubpassDescription::builder()
 							.pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-							.color_attachments(&[vk::AttachmentReference::builder()
-								.attachment(0)
-								.layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-								.build()])
+							.color_attachments(&[vk::AttachmentReference::builder().attachment(0).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL).build()])
 							.build()])
 						.dependencies(&[vk::SubpassDependency::builder()
 							.src_subpass(vk::SUBPASS_EXTERNAL)
@@ -345,11 +282,7 @@ impl VulkanSwapchain {
 				.expect("Failed to create Render Pass!")
 		};
 
-		let vk_images = unsafe {
-			swapchain_loader
-				.get_swapchain_images(swapchain)
-				.expect("Failed to get swapchain images")
-		};
+		let vk_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).expect("Failed to get swapchain images") };
 
 		let images: Vec<SwapchainImage> = vk_images
 			.into_iter()
@@ -403,14 +336,7 @@ impl VulkanSwapchain {
 			})
 			.collect();
 
-		(
-			image_format,
-			extent,
-			swapchain_loader,
-			swapchain,
-			render_pass,
-			images,
-		)
+		(image_format, extent, swapchain_loader, swapchain, render_pass, images)
 	}
 
 	pub fn raw_device(&self) -> &ash::Device {

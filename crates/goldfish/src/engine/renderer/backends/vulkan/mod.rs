@@ -15,7 +15,7 @@ use crate::window::Window;
 use command_pool::VulkanCommandBuffer;
 use swapchain::{FrameInfo, VulkanSwapchain};
 
-use crate::renderer::{DescriptorSetInfo, FrameId};
+use crate::renderer::{ClearValue, DescriptorSetInfo, FrameId, ImageLayout};
 use crate::types::{Color, Size};
 use ash::vk;
 use custom_error::custom_error;
@@ -28,10 +28,7 @@ custom_error! {pub SwapchainError
 }
 
 pub use buffer::VulkanBuffer;
-pub use descriptor::{
-	VulkanDescriptorHandle, VulkanDescriptorHeap, VulkanDescriptorLayout,
-	VulkanDescriptorLayoutCache,
-};
+pub use descriptor::{VulkanDescriptorHandle, VulkanDescriptorHeap, VulkanDescriptorLayout, VulkanDescriptorLayoutCache};
 pub use device::{VulkanDevice, VulkanUploadContext};
 pub use framebuffer::VulkanFramebuffer;
 pub use pipeline::VulkanPipeline;
@@ -46,20 +43,17 @@ pub enum VulkanRasterCmd {
 	BindIndexBuffer(vk::Buffer, vk::DeviceSize, vk::IndexType),
 	SetViewport(vk::Viewport),
 	SetScissor(vk::Rect2D),
-	BeginRenderPass(
-		vk::RenderPass,
-		vk::Framebuffer,
-		vk::Rect2D,
-		vk::ClearValue,
-		vk::SubpassContents,
-	),
+	BeginRenderPass(vk::RenderPass, vk::Framebuffer, vk::Rect2D, Vec<vk::ClearValue>, vk::SubpassContents),
 	EndRenderPass(),
 	DrawIndexed(u32, u32, u32, i32, u32),
-	BindDescriptor(
-		vk::PipelineBindPoint,
-		vk::PipelineLayout,
-		u32,
-		vk::DescriptorSet,
+	BindDescriptor(vk::PipelineBindPoint, vk::PipelineLayout, u32, vk::DescriptorSet),
+	PipelineBarrier(
+		vk::PipelineStageFlags,
+		vk::PipelineStageFlags,
+		vk::DependencyFlags,
+		Vec<vk::MemoryBarrier>,
+		Vec<vk::BufferMemoryBarrier>,
+		Vec<vk::ImageMemoryBarrier>,
 	),
 	None,
 }
@@ -100,12 +94,22 @@ pub struct VulkanGraphicsContext {
 	frame_id: FrameId,
 }
 
+impl From<ClearValue> for vk::ClearValue {
+	fn from(c: ClearValue) -> Self {
+		match c {
+			ClearValue::Color { r, g, b, a } => vk::ClearValue {
+				color: vk::ClearColorValue { float32: [r, g, b, a] },
+			},
+			ClearValue::DepthStencil { depth, stencil } => vk::ClearValue {
+				depth_stencil: vk::ClearDepthStencilValue { depth, stencil },
+			},
+		}
+	}
+}
+
 impl VulkanGraphicsContext {
 	pub fn begin_frame(&mut self, window: &Window) -> Result<(), SwapchainError> {
-		assert!(
-			self.current_frame_info.is_none(),
-			"Did not call end_frame before starting another frame!"
-		);
+		assert!(self.current_frame_info.is_none(), "Did not call end_frame before starting another frame!");
 
 		self.frame_id.incr();
 		match self.swapchain.acquire() {
@@ -124,10 +128,7 @@ impl VulkanGraphicsContext {
 	pub fn end_frame(&mut self, window: &Window) {
 		if let Some(current_frame_info) = self.current_frame_info.take() {
 			self.fill_raster_cmds(current_frame_info.command_buffer);
-			if let Err(_) = self.swapchain.submit(
-				current_frame_info.image_index,
-				current_frame_info.command_buffer,
-			) {
+			if let Err(_) = self.swapchain.submit(current_frame_info.image_index, current_frame_info.command_buffer) {
 				self.swapchain.invalidate(window.get_size());
 			}
 		} else {
@@ -144,9 +145,7 @@ impl VulkanGraphicsContext {
 		let raw = self.raw_device();
 		self.raster_cmds.take().into_iter().for_each(|cmd| unsafe {
 			match cmd {
-				VulkanRasterCmd::BindPipeline(bind_point, pipeline) => {
-					raw.cmd_bind_pipeline(cmd_buf, bind_point, pipeline)
-				}
+				VulkanRasterCmd::BindPipeline(bind_point, pipeline) => raw.cmd_bind_pipeline(cmd_buf, bind_point, pipeline),
 				VulkanRasterCmd::BindVertexBuffer(first_binding, buffer, offset) => {
 					raw.cmd_bind_vertex_buffers(cmd_buf, first_binding, &[buffer], &[offset]);
 				}
@@ -162,59 +161,41 @@ impl VulkanGraphicsContext {
 				VulkanRasterCmd::SetScissor(scissor) => {
 					raw.cmd_set_scissor(cmd_buf, 0, &[scissor]);
 				}
-				VulkanRasterCmd::BeginRenderPass(
-					render_pass,
-					framebuffer,
-					render_area,
-					clear_value,
-					subpass_contents,
-				) => {
+				VulkanRasterCmd::BeginRenderPass(render_pass, framebuffer, render_area, clear_values, subpass_contents) => {
 					raw.cmd_begin_render_pass(
 						cmd_buf,
 						&vk::RenderPassBeginInfo::builder()
 							.render_pass(render_pass)
 							.framebuffer(framebuffer)
 							.render_area(render_area)
-							.clear_values(&[clear_value]),
+							.clear_values(&clear_values),
 						subpass_contents,
 					);
 				}
 				VulkanRasterCmd::EndRenderPass() => {
 					raw.cmd_end_render_pass(cmd_buf);
 				}
-				VulkanRasterCmd::DrawIndexed(
-					index_count,
-					instance_count,
-					first_index,
-					vertex_offset,
-					first_instance,
-				) => raw.cmd_draw_indexed(
+				VulkanRasterCmd::DrawIndexed(index_count, instance_count, first_index, vertex_offset, first_instance) => {
+					raw.cmd_draw_indexed(cmd_buf, index_count, instance_count, first_index, vertex_offset, first_instance)
+				}
+				VulkanRasterCmd::BindDescriptor(pipeline_bind_point, pipeline_layout, first_set, descriptor_set) => {
+					raw.cmd_bind_descriptor_sets(cmd_buf, pipeline_bind_point, pipeline_layout, first_set, &[descriptor_set], &[])
+				}
+				VulkanRasterCmd::PipelineBarrier(src_stage_mask, dst_stage_mask, dependency_flags, memory_barriers, buffer_memory_barriers, image_memory_barriers) => raw.cmd_pipeline_barrier(
 					cmd_buf,
-					index_count,
-					instance_count,
-					first_index,
-					vertex_offset,
-					first_instance,
-				),
-				VulkanRasterCmd::BindDescriptor(
-					pipeline_bind_point,
-					pipeline_layout,
-					first_set,
-					descriptor_set,
-				) => raw.cmd_bind_descriptor_sets(
-					cmd_buf,
-					pipeline_bind_point,
-					pipeline_layout,
-					first_set,
-					&[descriptor_set],
-					&[],
+					src_stage_mask,
+					dst_stage_mask,
+					dependency_flags,
+					&memory_barriers,
+					&buffer_memory_barriers,
+					&image_memory_barriers,
 				),
 				VulkanRasterCmd::None => panic!("None raster command queued!"),
 			}
 		});
 	}
 
-	pub fn begin_output_render_pass(&self, color: Color) {
+	pub fn begin_output_render_pass(&self, clear_values: &[ClearValue]) {
 		tracy::span!();
 
 		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
@@ -229,10 +210,7 @@ impl VulkanGraphicsContext {
 		));
 
 		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(
-			vk::Rect2D::builder()
-				.offset(vk::Offset2D { x: 0, y: 0 })
-				.extent(self.swapchain.extent)
-				.build(),
+			vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(self.swapchain.extent).build(),
 		));
 
 		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass(
@@ -242,21 +220,12 @@ impl VulkanGraphicsContext {
 				offset: vk::Offset2D { x: 0, y: 0 },
 				extent: self.swapchain.extent,
 			},
-			vk::ClearValue {
-				color: vk::ClearColorValue {
-					float32: [color.r, color.g, color.b, color.a],
-				},
-			},
+			clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
 			vk::SubpassContents::INLINE,
 		));
 	}
 
-	pub fn begin_render_pass(
-		&self,
-		render_pass: &VulkanRenderPass,
-		framebuffer: &VulkanFramebuffer,
-		clear_value: Color,
-	) {
+	pub fn begin_render_pass(&self, render_pass: &VulkanRenderPass, framebuffer: &VulkanFramebuffer, clear_values: &[ClearValue]) {
 		self.queue_raster_cmd(VulkanRasterCmd::SetViewport(
 			vk::Viewport::builder()
 				.x(0.0)
@@ -273,12 +242,7 @@ impl VulkanGraphicsContext {
 			height: framebuffer.height,
 		};
 
-		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(
-			vk::Rect2D::builder()
-				.offset(vk::Offset2D { x: 0, y: 0 })
-				.extent(extent)
-				.build(),
-		));
+		self.queue_raster_cmd(VulkanRasterCmd::SetScissor(vk::Rect2D::builder().offset(vk::Offset2D { x: 0, y: 0 }).extent(extent).build()));
 
 		self.queue_raster_cmd(VulkanRasterCmd::BeginRenderPass(
 			render_pass.raw,
@@ -287,11 +251,7 @@ impl VulkanGraphicsContext {
 				offset: vk::Offset2D { x: 0, y: 0 },
 				extent,
 			},
-			vk::ClearValue {
-				color: vk::ClearColorValue {
-					float32: [clear_value.r, clear_value.g, clear_value.b, clear_value.a],
-				},
-			},
+			clear_values.iter().map(|&c| c.into()).collect::<Vec<_>>(),
 			vk::SubpassContents::INLINE,
 		));
 	}
@@ -301,10 +261,7 @@ impl VulkanGraphicsContext {
 	}
 
 	fn get_output_framebuffer(&self) -> vk::Framebuffer {
-		self.current_frame_info
-			.as_ref()
-			.expect("begin_frame was not called!")
-			.output_framebuffer
+		self.current_frame_info.as_ref().expect("begin_frame was not called!").output_framebuffer
 	}
 
 	pub fn raw_device(&self) -> &ash::Device {
@@ -329,63 +286,43 @@ impl VulkanGraphicsContext {
 		face_cull: bool,
 		push_constant_bytes: usize,
 	) -> VulkanPipeline {
-		self.swapchain.create_raster_pipeline(
-			vs,
-			ps,
-			descriptor_layouts,
-			depth_write,
-			face_cull,
-			push_constant_bytes,
-		)
+		self.swapchain.create_raster_pipeline(vs, ps, descriptor_layouts, depth_write, face_cull, push_constant_bytes)
 	}
 
 	pub fn draw_indexed(&self, index_count: u32) {
 		self.queue_raster_cmd(VulkanRasterCmd::DrawIndexed(index_count, 1, 0, 0, 0));
 	}
 
-	pub fn bind_descriptor(
-		&self,
-		descriptor_heap: &VulkanDescriptorHeap,
-		descriptor_set: &VulkanDescriptorHandle,
-		set: u32,
-		pipeline: &VulkanPipeline,
-	) {
-		let frame = self
-			.current_frame_info
-			.as_ref()
-			.expect("begin_frame was not called!")
-			.frame_index;
+	pub fn bind_descriptor(&self, descriptor_heap: &VulkanDescriptorHeap, descriptor_set: &VulkanDescriptorHandle, set: u32, pipeline: &VulkanPipeline) {
+		let frame = self.current_frame_info.as_ref().expect("begin_frame was not called!").frame_index;
 
 		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
-		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor(
-			vk::PipelineBindPoint::GRAPHICS,
-			pipeline.pipeline_layout,
-			set,
-			descriptor,
-		));
+		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor(vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline_layout, set, descriptor));
 	}
 
-	pub fn update_descriptor_buffers(
+	pub fn update_descriptor(
 		&mut self,
 		buffers: &[(u32, &VulkanBuffer)],
+		images: &[(u32, &VulkanTexture, ImageLayout)],
 		descriptor_layout: &'static DescriptorSetInfo,
 		descriptor_heap: &VulkanDescriptorHeap,
 		descriptor_set: &VulkanDescriptorHandle,
 	) {
-		let frame = self
-			.current_frame_info
-			.as_ref()
-			.expect("begin_frame was not called!")
-			.frame_index;
+		let frame = self.current_frame_info.as_ref().expect("begin_frame was not called!").frame_index;
 		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
 
 		let buffer_infos = buffers
 			.iter()
-			.map(|(_, buffer)| {
-				vk::DescriptorBufferInfo::builder()
-					.buffer(buffer.raw)
-					.offset(0)
-					.range(buffer.size as u64)
+			.map(|(_, buffer)| vk::DescriptorBufferInfo::builder().buffer(buffer.raw).offset(0).range(buffer.size as u64).build())
+			.collect::<Vec<_>>();
+
+		let image_infos = images
+			.iter()
+			.map(|(_, image, layout)| {
+				vk::DescriptorImageInfo::builder()
+					.image_view(image.image_view)
+					.sampler(image.sampler)
+					.image_layout((*layout).into())
 					.build()
 			})
 			.collect::<Vec<_>>();
@@ -399,16 +336,41 @@ impl VulkanGraphicsContext {
 						vk::WriteDescriptorSet::builder()
 							.dst_set(descriptor)
 							.dst_binding(*binding)
-							.descriptor_type(
-								(*descriptor_layout.bindings.get(&binding).unwrap()).into(),
-							)
+							.descriptor_type((*descriptor_layout.bindings.get(&binding).unwrap()).into())
 							.buffer_info(&buffer_infos[i..=i])
 							.build()
 					})
+					.chain(images.iter().enumerate().map(|(i, (binding, _, _))| {
+						vk::WriteDescriptorSet::builder()
+							.dst_set(descriptor)
+							.dst_binding(*binding)
+							.descriptor_type((*descriptor_layout.bindings.get(&binding).unwrap()).into())
+							.image_info(&image_infos[i..=i])
+							.build()
+					}))
 					.collect::<Vec<_>>(),
 				&[],
 			)
 		};
+	}
+
+	pub fn pipeline_barrier(
+		&self,
+		src_stage_mask: vk::PipelineStageFlags,
+		dst_stage_mask: vk::PipelineStageFlags,
+		dependency_flags: vk::DependencyFlags,
+		memory_barriers: &[vk::MemoryBarrier],
+		buffer_memory_barriers: &[vk::BufferMemoryBarrier],
+		image_memory_barriers: &[vk::ImageMemoryBarrier],
+	) {
+		self.queue_raster_cmd(VulkanRasterCmd::PipelineBarrier(
+			src_stage_mask,
+			dst_stage_mask,
+			dependency_flags,
+			memory_barriers.to_vec(),
+			buffer_memory_barriers.to_vec(),
+			image_memory_barriers.to_vec(),
+		))
 	}
 }
 

@@ -59,6 +59,12 @@ pub enum TextureFormat {
 	Depth,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub enum ClearValue {
+	Color { r: f32, g: f32, b: f32, a: f32 },
+	DepthStencil { depth: f32, stencil: u32 },
+}
+
 #[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum ImageLayout {
 	Undefined,

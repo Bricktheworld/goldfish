@@ -44,8 +44,7 @@ pub struct GoldfishEngine {
 }
 
 #[global_allocator]
-static GLOBAL: tracy::ProfiledAllocator<std::alloc::System> =
-	tracy::ProfiledAllocator::new(std::alloc::System, 128);
+static GLOBAL: tracy::ProfiledAllocator<std::alloc::System> = tracy::ProfiledAllocator::new(std::alloc::System, 128);
 
 impl GoldfishEngine {
 	pub fn new(title: &'static str, package_reader: ReadAssetFn) -> Self {
@@ -78,45 +77,36 @@ impl GoldfishEngine {
 	where
 		F: FnMut(&mut Self, Duration),
 	{
-		Window::run(
-			self.window.get_run_context(),
-			|dt, keys, mouse_delta, new_size| {
-				self.keys.copy_from_slice(keys);
-				self.mouse_delta = mouse_delta;
+		Window::run(self.window.get_run_context(), |dt, keys, mouse_delta, new_size| {
+			self.keys.copy_from_slice(keys);
+			self.mouse_delta = mouse_delta;
 
-				tracy::span!();
-				// let renderer = self.renderer.as_mut().unwrap();
+			tracy::span!();
+			// let renderer = self.renderer.as_mut().unwrap();
 
-				if let Some(size) = new_size {
-					self.graphics_context.on_resize(size);
+			if let Some(size) = new_size {
+				self.graphics_context.on_resize(size);
 
-					// TODO(Brandon): This is really really really fucking stupid, but it's the
-					// only way I've been able to stop this ERROR_NATIVE_WINDOW_IN_USE_KHR
-					// nonsense. I need to find a better solution to this
-					return;
-				}
-				// renderer.update(&self.window);
+				// TODO(Brandon): This is really really really fucking stupid, but it's the
+				// only way I've been able to stop this ERROR_NATIVE_WINDOW_IN_USE_KHR
+				// nonsense. I need to find a better solution to this
+				return;
+			}
+			// renderer.update(&self.window);
 
-				editor_update(self, dt);
-				tracy::frame_mark();
-			},
-		);
+			editor_update(self, dt);
+			tracy::frame_mark();
+		});
 	}
 
 	pub fn lock_cursor(&self) {
-		self.window
-			.winit_window
-			.set_cursor_grab(winit::window::CursorGrabMode::Locked)
-			.unwrap();
+		self.window.winit_window.set_cursor_grab(winit::window::CursorGrabMode::Locked).unwrap();
 		self.window.winit_window.set_cursor_visible(false);
 	}
 
 	pub fn unlock_cursor(&self) {
 		self.window.winit_window.set_cursor_visible(true);
-		self.window
-			.winit_window
-			.set_cursor_grab(winit::window::CursorGrabMode::None)
-			.unwrap();
+		self.window.winit_window.set_cursor_grab(winit::window::CursorGrabMode::None).unwrap();
 	}
 }
 

@@ -3,13 +3,13 @@
 
 #define CAMERA_BUFFER_SLOT b0
 
-struct VS_INPUT
+struct VSInput
 {
-    float3 position : POSITION;
-    float3 normal : NORMAL;
-    float2 uv : UV;
-    float3 tangent: TANGENT;
-    float3 bitangent: BITANGENT;
+    float3 position : POSITION0;
+    float3 normal : NORMAL0;
+    float2 uv : TEXCOORD0;
+    float3 tangent: TANGENT0;
+    float3 bitangent: BINORMAL0;
 };
 
 struct Camera

@@ -22,14 +22,7 @@ impl VulkanDevice {
 			QueueType::GRAPHICS => self.get_queue_family_indices().graphics_family,
 			QueueType::COMPUTE => self.get_queue_family_indices().compute_family,
 		};
-		let raw = unsafe {
-			self.raw
-				.create_command_pool(
-					&vk::CommandPoolCreateInfo::builder().queue_family_index(queue_index),
-					None,
-				)
-				.unwrap()
-		};
+		let raw = unsafe { self.raw.create_command_pool(&vk::CommandPoolCreateInfo::builder().queue_family_index(queue_index), None).unwrap() };
 
 		VulkanCommandPool {
 			raw,
@@ -47,10 +40,7 @@ impl VulkanDevice {
 impl VulkanCommandPool {
 	pub fn begin_command_buffer(&mut self, device: &VulkanDevice) -> VulkanCommandBuffer {
 		tracy::span!();
-		assert!(
-			self.index <= self.command_buffers.len(),
-			"Invalid command buffer index!"
-		);
+		assert!(self.index <= self.command_buffers.len(), "Invalid command buffer index!");
 
 		if self.index == self.command_buffers.len() {
 			self.expand(device);
@@ -61,28 +51,17 @@ impl VulkanCommandPool {
 		unsafe {
 			device
 				.raw
-				.begin_command_buffer(
-					command_buffer,
-					&vk::CommandBufferBeginInfo::builder()
-						.flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-				)
+				.begin_command_buffer(command_buffer, &vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT))
 				.expect("Failed to begin command buffer!");
 		}
 
 		return command_buffer;
 	}
 
-	pub fn end_command_buffer(
-		&mut self,
-		device: &VulkanDevice,
-		command_buffer: VulkanCommandBuffer,
-	) {
+	pub fn end_command_buffer(&mut self, device: &VulkanDevice, command_buffer: VulkanCommandBuffer) {
 		tracy::span!();
 		unsafe {
-			device
-				.raw
-				.end_command_buffer(command_buffer)
-				.expect("Failed to end command buffer!");
+			device.raw.end_command_buffer(command_buffer).expect("Failed to end command buffer!");
 		}
 
 		self.index += 1;

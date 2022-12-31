@@ -11,6 +11,7 @@ pub fn import_mesh(data: &[u8], extension: &str) -> Result<Vec<MeshPackage>, Edi
 			PostProcess::Triangulate,
 			PostProcess::JoinIdenticalVertices,
 			PostProcess::SortByPrimitiveType,
+			PostProcess::MakeLeftHanded,
 		],
 		extension,
 	)
@@ -24,16 +25,8 @@ pub fn import_mesh(data: &[u8], extension: &str) -> Result<Vec<MeshPackage>, Edi
 					position: vec3(mesh.vertices[i].x, mesh.vertices[i].y, mesh.vertices[i].z),
 					normal: vec3(mesh.normals[i].x, mesh.normals[i].y, mesh.normals[i].z),
 					tangent: vec3(mesh.tangents[i].x, mesh.tangents[i].y, mesh.tangents[i].z),
-					uv: if let Some(ref uv) = mesh.texture_coords[0] {
-						vec2(uv[i].x, uv[i].y)
-					} else {
-						vec2(0.0, 0.0)
-					},
-					bitangent: vec3(
-						mesh.bitangents[i].x,
-						mesh.bitangents[i].y,
-						mesh.bitangents[i].z,
-					),
+					uv: if let Some(ref uv) = mesh.texture_coords[0] { vec2(uv[i].x, uv[i].y) } else { vec2(0.0, 0.0) },
+					bitangent: vec3(mesh.bitangents[i].x, mesh.bitangents[i].y, mesh.bitangents[i].z),
 				})
 				.collect::<Vec<_>>();
 

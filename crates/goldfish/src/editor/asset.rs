@@ -81,9 +81,7 @@ impl Asset {
 
 		let additional_data = match asset_type {
 			AssetType::Mesh => AdditionalAssetData::Mesh,
-			AssetType::Texture => AdditionalAssetData::Texture(TextureAsset {
-				format: TextureFormat::RGBA8,
-			}),
+			AssetType::Texture => AdditionalAssetData::Texture(TextureAsset { format: TextureFormat::RGBA8 }),
 			AssetType::Shader => AdditionalAssetData::Shader,
 			AssetType::Other => AdditionalAssetData::Other,
 		};
@@ -117,9 +115,7 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 
 			let meta_path = asset_path.with_extension(&meta_extension);
 
-			let asset_type = AssetType::from_extension(
-				asset_path.extension().unwrap_or_default().to_str().unwrap(),
-			);
+			let asset_type = AssetType::from_extension(asset_path.extension().unwrap_or_default().to_str().unwrap());
 
 			let mut meta_file_was_created = false;
 
@@ -127,8 +123,7 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 
 			let import_mesh_packages = || -> Result<Option<Vec<MeshPackage>>, EditorError> {
 				let extension = asset_path.extension().unwrap().to_str().unwrap();
-				let data =
-					fs::read(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
+				let data = fs::read(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
 				Ok(Some(super::mesh_importer::import_mesh(&data, &extension)?))
 			};
 
@@ -147,10 +142,7 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 					}
 				}
 			} else {
-				println!(
-					"Failed to find meta file {}! Creating...",
-					meta_path.as_path().to_str().unwrap()
-				);
+				println!("Failed to find meta file {}! Creating...", meta_path.as_path().to_str().unwrap());
 
 				mesh_packages = match asset_type {
 					AssetType::Mesh => import_mesh_packages()?,
@@ -162,53 +154,38 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 					None => Asset::new(asset_type, 1),
 				};
 
-				let serialized = serde_json::to_string_pretty(&metadata)
-					.map_err(move |_| EditorError::Serialize)?;
+				let serialized = serde_json::to_string_pretty(&metadata).map_err(move |_| EditorError::Serialize)?;
 
-				fs::write(&meta_path, serialized)
-					.map_err(move |err| EditorError::Filesystem(err))?;
+				fs::write(&meta_path, serialized).map_err(move |err| EditorError::Filesystem(err))?;
 				meta_file_was_created = true;
 
 				metadata
 			};
 
 			for (i, uuid) in asset.uuids.iter().enumerate() {
-				let build_path = Path::new(BUILD_ASSET_DIR)
-					.join(uuid.to_string())
-					.with_extension(BUILD_ASSET_EXTENSION);
+				let build_path = Path::new(BUILD_ASSET_DIR).join(uuid.to_string()).with_extension(BUILD_ASSET_EXTENSION);
 
-				let mut needs_reimport = asset.version != Asset::CURRENT_ASSET_VERSION
-					|| meta_file_was_created
-					|| !build_path.is_file();
+				let mut needs_reimport = asset.version != Asset::CURRENT_ASSET_VERSION || meta_file_was_created || !build_path.is_file();
 
 				if !needs_reimport {
-					let build_meta = fs::metadata(&build_path)
-						.map_err(move |err| EditorError::Filesystem(err))?;
-					let asset_meta = fs::metadata(&asset_path)
-						.map_err(move |err| EditorError::Filesystem(err))?;
-					let meta_meta = fs::metadata(&meta_path)
-						.map_err(move |err| EditorError::Filesystem(err))?;
+					let build_meta = fs::metadata(&build_path).map_err(move |err| EditorError::Filesystem(err))?;
+					let asset_meta = fs::metadata(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
+					let meta_meta = fs::metadata(&meta_path).map_err(move |err| EditorError::Filesystem(err))?;
 
 					let asset_modified_time = FileTime::from_last_modification_time(&asset_meta);
 					let build_modified_time = FileTime::from_last_modification_time(&build_meta);
 					let meta_modified_time = FileTime::from_last_modification_time(&meta_meta);
 
-					needs_reimport = asset_modified_time > build_modified_time
-						|| meta_modified_time > build_modified_time;
+					needs_reimport = asset_modified_time > build_modified_time || meta_modified_time > build_modified_time;
 				}
 
 				if needs_reimport {
 					let serialized = match asset.asset_type {
 						AssetType::Shader => {
-							let shader_data = fs::read_to_string(&asset_path)
-								.map_err(move |err| EditorError::Filesystem(err))?;
-							let shader_asset =
-								shader_compiler::compile_hlsl(&asset_path, &shader_data)?;
+							let shader_data = fs::read_to_string(&asset_path).map_err(move |err| EditorError::Filesystem(err))?;
+							let shader_asset = shader_compiler::compile_hlsl(&asset_path, &shader_data)?;
 
-							Some(
-								bincode::serialize(&shader_asset)
-									.map_err(move |_| EditorError::Serialize)?,
-							)
+							Some(bincode::serialize(&shader_asset).map_err(move |_| EditorError::Serialize)?)
 						}
 						AssetType::Mesh => {
 							if mesh_packages.is_none() {
@@ -220,25 +197,23 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 								panic!("??");
 							};
 
-							Some(
-								bincode::serialize(&mesh_packages[i])
-									.map_err(move |_| EditorError::Serialize)?,
-							)
+							Some(bincode::serialize(&mesh_packages[i]).map_err(move |_| EditorError::Serialize)?)
 						}
 						_ => None,
 					};
 
 					if let Some(serialized) = serialized {
-						let mut output = fs::File::create(&build_path)
-							.map_err(move |err| EditorError::Filesystem(err))?;
-						output
-							.write_all(&serialized)
-							.map_err(move |err| EditorError::Filesystem(err))?;
+						let mut output = fs::File::create(&build_path).map_err(move |err| EditorError::Filesystem(err))?;
+						output.write_all(&serialized).map_err(move |err| EditorError::Filesystem(err))?;
 
 						// Touch asset files
 						let now = FileTime::now();
 						if let Err(err) = filetime::set_file_mtime(&build_path, now) {
-							println!("WARNING: Failed to update date modified for build file {}! Maybe it wasn't created properly? {}", build_path.as_path().to_str().unwrap_or("UNKNOWN_BUILD_PATH"), err);
+							println!(
+								"WARNING: Failed to update date modified for build file {}! Maybe it wasn't created properly? {}",
+								build_path.as_path().to_str().unwrap_or("UNKNOWN_BUILD_PATH"),
+								err
+							);
 						}
 
 						if let Err(err) = filetime::set_file_mtime(&meta_path, now) {
@@ -255,34 +230,22 @@ pub fn import_assets(asset_dir: &Path) -> Result<(), EditorError> {
 }
 
 pub fn read_asset(uuid: Uuid, asset_type: AssetType) -> GoldfishResult<Package> {
-	let build_path = Path::new(BUILD_ASSET_DIR)
-		.join(uuid.to_string())
-		.with_extension(BUILD_ASSET_EXTENSION);
+	let build_path = Path::new(BUILD_ASSET_DIR).join(uuid.to_string()).with_extension(BUILD_ASSET_EXTENSION);
 
 	match asset_type {
 		AssetType::Shader => {
-			let contents =
-				fs::read(&build_path).map_err(move |err| GoldfishError::Filesystem(err))?;
+			let contents = fs::read(&build_path).map_err(move |err| GoldfishError::Filesystem(err))?;
 
-			let package = bincode::deserialize::<ShaderPackage>(&contents).map_err(move |err| {
-				GoldfishError::Unknown(
-					"Failed to deserialize shader package: ".to_string()
-						+ &err.to_string() + ". Try cleaning '.build' and reimporting all assets.",
-				)
-			})?;
+			let package = bincode::deserialize::<ShaderPackage>(&contents)
+				.map_err(move |err| GoldfishError::Unknown("Failed to deserialize shader package: ".to_string() + &err.to_string() + ". Try cleaning '.build' and reimporting all assets."))?;
 
 			Ok(Package::Shader(package))
 		}
 		AssetType::Mesh => {
-			let contents =
-				fs::read(&build_path).map_err(move |err| GoldfishError::Filesystem(err))?;
+			let contents = fs::read(&build_path).map_err(move |err| GoldfishError::Filesystem(err))?;
 
-			let package = bincode::deserialize::<MeshPackage>(&contents).map_err(move |err| {
-				GoldfishError::Unknown(
-					"Failed to deserialize mesh package: ".to_string()
-						+ &err.to_string() + ". Try cleaning '.build' and reimporting all assets.",
-				)
-			})?;
+			let package = bincode::deserialize::<MeshPackage>(&contents)
+				.map_err(move |err| GoldfishError::Unknown("Failed to deserialize mesh package: ".to_string() + &err.to_string() + ". Try cleaning '.build' and reimporting all assets."))?;
 
 			Ok(Package::Mesh(package))
 		}

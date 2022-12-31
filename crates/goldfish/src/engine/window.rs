@@ -45,9 +45,7 @@ impl Window {
 	}
 
 	pub fn get_run_context(&mut self) -> WindowRunContext {
-		self.event_loop
-			.take()
-			.expect("Cannot get call get_run_context more than once!")
+		self.event_loop.take().expect("Cannot get call get_run_context more than once!")
 	}
 
 	pub fn run<F>(mut context: WindowRunContext, mut update_fn: F)
@@ -64,12 +62,10 @@ impl Window {
 
 			match event {
 				Event::WindowEvent {
-					event: WindowEvent::CloseRequested,
-					..
+					event: WindowEvent::CloseRequested, ..
 				} => *control_flow = ControlFlow::Exit,
 				Event::WindowEvent {
-					event: WindowEvent::Resized(size),
-					..
+					event: WindowEvent::Resized(size), ..
 				} => {
 					new_size = Some(Size {
 						width: size.width,
@@ -79,13 +75,12 @@ impl Window {
 				Event::WindowEvent {
 					event:
 						WindowEvent::KeyboardInput {
-							input:
-								winit::event::KeyboardInput {
-									virtual_keycode: Some(keycode),
-									state,
-									scancode,
-									..
-								},
+							input: winit::event::KeyboardInput {
+								virtual_keycode: Some(keycode),
+								state,
+								scancode,
+								..
+							},
 							..
 						},
 					..

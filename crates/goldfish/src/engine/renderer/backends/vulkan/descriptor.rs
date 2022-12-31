@@ -38,25 +38,15 @@ impl VulkanDevice {
 		}
 	}
 
-	pub fn get_graphics_layout(
-		&self,
-		cache: &mut VulkanDescriptorLayoutCache,
-		info: &'static DescriptorSetInfo,
-	) -> VulkanDescriptorLayout {
-		*cache.graphics_layouts.entry(info).or_insert_with(|| {
-			self.create_descriptor_layout(&info, vk::ShaderStageFlags::ALL_GRAPHICS)
-		})
+	pub fn get_graphics_layout(&self, cache: &mut VulkanDescriptorLayoutCache, info: &'static DescriptorSetInfo) -> VulkanDescriptorLayout {
+		*cache
+			.graphics_layouts
+			.entry(info)
+			.or_insert_with(|| self.create_descriptor_layout(&info, vk::ShaderStageFlags::ALL_GRAPHICS))
 	}
 
-	pub fn get_compute_layout(
-		&self,
-		cache: &mut VulkanDescriptorLayoutCache,
-		info: &'static DescriptorSetInfo,
-	) -> VulkanDescriptorLayout {
-		*cache
-			.compute_layouts
-			.entry(info)
-			.or_insert_with(|| self.create_descriptor_layout(&info, vk::ShaderStageFlags::COMPUTE))
+	pub fn get_compute_layout(&self, cache: &mut VulkanDescriptorLayoutCache, info: &'static DescriptorSetInfo) -> VulkanDescriptorLayout {
+		*cache.compute_layouts.entry(info).or_insert_with(|| self.create_descriptor_layout(&info, vk::ShaderStageFlags::COMPUTE))
 	}
 
 	pub fn destroy_descriptor_layout_cache(&mut self, cache: VulkanDescriptorLayoutCache) {
@@ -65,21 +55,12 @@ impl VulkanDevice {
 				.graphics_layouts
 				.iter()
 				.map(|(_, layout)| VulkanDestructor::DescriptorSetLayout(*layout))
-				.chain(
-					cache
-						.compute_layouts
-						.iter()
-						.map(|(_, layout)| VulkanDestructor::DescriptorSetLayout(*layout)),
-				)
+				.chain(cache.compute_layouts.iter().map(|(_, layout)| VulkanDestructor::DescriptorSetLayout(*layout)))
 				.collect::<Vec<_>>(),
 		);
 	}
 
-	fn create_descriptor_layout(
-		&self,
-		info: &DescriptorSetInfo,
-		stage_flags: vk::ShaderStageFlags,
-	) -> vk::DescriptorSetLayout {
+	fn create_descriptor_layout(&self, info: &DescriptorSetInfo, stage_flags: vk::ShaderStageFlags) -> vk::DescriptorSetLayout {
 		unsafe {
 			self.raw
 				.create_descriptor_set_layout(
@@ -131,11 +112,7 @@ impl VulkanDescriptorHeap {
 	}
 
 	pub fn free(&mut self, handle: VulkanDescriptorHandle) {
-		let i = self
-			.allocated_descriptors
-			.iter()
-			.position(|i| *i == handle.id)
-			.expect("Double vulkan descriptor free detected!");
+		let i = self.allocated_descriptors.iter().position(|i| *i == handle.id).expect("Double vulkan descriptor free detected!");
 		self.allocated_descriptors.swap_remove(i);
 		self.free_descriptors.push(handle.id);
 	}
@@ -161,12 +138,7 @@ impl VulkanDevice {
 
 		let frame_pools = core::array::from_fn(|_| unsafe {
 			self.raw
-				.create_descriptor_pool(
-					&vk::DescriptorPoolCreateInfo::builder()
-						.pool_sizes(&pool_sizes)
-						.max_sets(max_sets),
-					None,
-				)
+				.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::builder().pool_sizes(&pool_sizes).max_sets(max_sets), None)
 				.expect("Failed to create descriptor pool!")
 		});
 
@@ -174,11 +146,7 @@ impl VulkanDevice {
 			.map(|_| {
 				core::array::from_fn(|i| unsafe {
 					self.raw
-						.allocate_descriptor_sets(
-							&vk::DescriptorSetAllocateInfo::builder()
-								.set_layouts(&[layout])
-								.descriptor_pool(frame_pools[i]),
-						)
+						.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::builder().set_layouts(&[layout]).descriptor_pool(frame_pools[i]))
 						.expect("Failed to allocate descriptor set")[0]
 				})
 			})
@@ -195,10 +163,6 @@ impl VulkanDevice {
 	}
 
 	pub fn destroy_descriptor_heap(&mut self, descriptor_heap: VulkanDescriptorHeap) {
-		self.queue_destruction(
-			&mut descriptor_heap
-				.frame_pools
-				.map(|pool| VulkanDestructor::DescriptorPool(pool)),
-		);
+		self.queue_destruction(&mut descriptor_heap.frame_pools.map(|pool| VulkanDestructor::DescriptorPool(pool)));
 	}
 }

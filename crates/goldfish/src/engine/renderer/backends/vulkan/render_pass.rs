@@ -36,12 +36,8 @@ impl From<ImageLayout> for vk::ImageLayout {
 			ImageLayout::Undefined => vk::ImageLayout::UNDEFINED,
 			ImageLayout::General => vk::ImageLayout::GENERAL,
 			ImageLayout::ColorAttachmentOptimal => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-			ImageLayout::DepthStencilAttachmentOptimal => {
-				vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-			}
-			ImageLayout::DepthStencilReadOnlyOptimal => {
-				vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
-			}
+			ImageLayout::DepthStencilAttachmentOptimal => vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+			ImageLayout::DepthStencilReadOnlyOptimal => vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
 			ImageLayout::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 			ImageLayout::TransferSrcOptimal => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
 			ImageLayout::TransferDstOptimal => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -65,11 +61,7 @@ impl AttachmentDescription {
 }
 
 impl VulkanDevice {
-	pub fn create_render_pass(
-		&self,
-		color_attachments: &[AttachmentDescription],
-		depth_attachment: Option<AttachmentDescription>,
-	) -> VulkanRenderPass {
+	pub fn create_render_pass(&self, color_attachments: &[AttachmentDescription], depth_attachment: Option<AttachmentDescription>) -> VulkanRenderPass {
 		let render_pass_attachments = color_attachments
 			.iter()
 			.map(|desc| desc.to_vk(self))
@@ -96,20 +88,16 @@ impl VulkanDevice {
 			.color_attachments(&color_attachment_refs)
 			.pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
 		if depth_attachment.is_some() {
-			subpass_description =
-				subpass_description.depth_stencil_attachment(&depth_attachment_ref);
+			subpass_description = subpass_description.depth_stencil_attachment(&depth_attachment_ref);
 		}
 
 		let subpass_description = subpass_description.build();
 
 		let subpasses = [subpass_description];
-		let render_pass_info = vk::RenderPassCreateInfo::builder()
-			.attachments(&render_pass_attachments)
-			.subpasses(&subpasses);
 
 		let raw = unsafe {
 			self.raw
-				.create_render_pass(&render_pass_info, None)
+				.create_render_pass(&vk::RenderPassCreateInfo::builder().attachments(&render_pass_attachments).subpasses(&subpasses), None)
 				.expect("Failed to create render pass!")
 		};
 

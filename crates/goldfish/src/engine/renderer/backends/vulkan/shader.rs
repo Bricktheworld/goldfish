@@ -8,12 +8,7 @@ pub struct VulkanShader {
 
 impl VulkanDevice {
 	pub fn create_shader(&self, data: &[u8]) -> VulkanShader {
-		self.create_shader_with_code(
-			&data
-				.chunks_exact(4)
-				.map(|bytes| u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-				.collect::<Vec<_>>(),
-		)
+		self.create_shader_with_code(&data.chunks_exact(4).map(|bytes| u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect::<Vec<_>>())
 	}
 
 	pub fn create_shader_with_code(&self, code: &[u32]) -> VulkanShader {

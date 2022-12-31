@@ -10,7 +10,7 @@ impl Size {
 	}
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Color {
 	pub r: f32,
 	pub g: f32,

@@ -3,18 +3,23 @@
 struct PSInput
 {
 	float4 position : SV_POSITION;
+	float2 uv : TEXCOORD0;
 };
+
+[[vk::binding(0,1)]] Texture2D<float4> t_albedo : register(t0);
+[[vk::binding(1,1)]] SamplerState s_albedo : register(s1);
 
 PSInput vs_main(VSInput input)
 {
 	PSInput result;
 	
 	result.position = mul(g_camera.view_proj, mul(g_model.matrix, float4(input.position, 1.0)));
+	result.uv = input.uv;
 	
 	return result;
 }
 
 float4 ps_main(PSInput input) : SV_TARGET
 {
-	return float4(1.0, 0.0, 0.0, 1.0);
+	return t_albedo.Sample(s_albedo, input.uv);
 }

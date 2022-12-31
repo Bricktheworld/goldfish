@@ -13,13 +13,7 @@ pub struct VulkanFramebuffer {
 }
 
 impl VulkanDevice {
-	pub fn create_framebuffer(
-		&self,
-		width: u32,
-		height: u32,
-		render_pass: &VulkanRenderPass,
-		attachments: &[&VulkanTexture],
-	) -> VulkanFramebuffer {
+	pub fn create_framebuffer(&self, width: u32, height: u32, render_pass: &VulkanRenderPass, attachments: &[&VulkanTexture]) -> VulkanFramebuffer {
 		let attachments = attachments.iter().map(|a| a.image_view).collect::<Vec<_>>();
 
 		let raw = unsafe {

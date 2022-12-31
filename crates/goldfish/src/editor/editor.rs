@@ -43,14 +43,9 @@ fn main() {
 		panic!("Failed to find resource directory!");
 	}
 
-	let lib = unsafe {
-		Library::new(Path::new("target/debug/libgame.so")).expect("Failed to load libgame!")
-	};
+	let lib = unsafe { Library::new(Path::new("target/debug/libgame.so")).expect("Failed to load libgame!") };
 
-	let game_lib = unsafe {
-		lib.get::<Symbol<CreateGamelibApi>>(b"_goldfish_create_game_lib")
-			.expect("No gamelib constructor found!")()
-	};
+	let game_lib = unsafe { lib.get::<Symbol<CreateGamelibApi>>(b"_goldfish_create_game_lib").expect("No gamelib constructor found!")() };
 
 	match asset::import_assets(Path::new(ASSET_DIR)) {
 		Err(err) => panic!("Failed to import assets: {}", err),

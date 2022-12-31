@@ -12,6 +12,7 @@ pub struct VulkanTexture {
 	pub image: vk::Image,
 	pub sampler: vk::Sampler,
 	pub image_view: vk::ImageView,
+	pub subresource_range: vk::ImageSubresourceRange,
 
 	pub allocation: vma::Allocation,
 	pub format: TextureFormat,
@@ -28,22 +29,14 @@ impl Hash for VulkanTexture {
 
 impl PartialEq for VulkanTexture {
 	fn eq(&self, other: &Self) -> bool {
-		self.image == other.image
-			&& self.sampler == other.sampler
-			&& self.image_view == other.image_view
+		self.image == other.image && self.sampler == other.sampler && self.image_view == other.image_view
 	}
 }
 
 impl Eq for VulkanTexture {}
 
 impl VulkanDevice {
-	pub fn create_texture(
-		&self,
-		width: u32,
-		height: u32,
-		format: TextureFormat,
-		usage: TextureUsage,
-	) -> VulkanTexture {
+	pub fn create_texture(&self, width: u32, height: u32, format: TextureFormat, usage: TextureUsage) -> VulkanTexture {
 		let mut usage_flags = vk::ImageUsageFlags::default();
 
 		if usage.contains(TextureUsage::ATTACHMENT) {
@@ -86,11 +79,7 @@ impl VulkanDevice {
 						})
 						.image_type(vk::ImageType::TYPE_2D)
 						.format(vk_format)
-						.extent(vk::Extent3D {
-							width,
-							height,
-							depth: 1,
-						})
+						.extent(vk::Extent3D { width, height, depth: 1 })
 						.mip_levels(1)
 						.array_layers(if format.is_cubemap() { 6 } else { 1 })
 						.samples(vk::SampleCountFlags::TYPE_1)
@@ -115,9 +104,7 @@ impl VulkanDevice {
 			.expect("Failed to allocate memory!");
 
 		unsafe {
-			self.raw
-				.bind_image_memory(image, allocation.memory(), allocation.offset())
-				.expect("Failed to bind image memory!");
+			self.raw.bind_image_memory(image, allocation.memory(), allocation.offset()).expect("Failed to bind image memory!");
 		}
 
 		let sampler = unsafe {
@@ -140,29 +127,25 @@ impl VulkanDevice {
 				.expect("Failed to create sampler!")
 		};
 
+		let subresource_range = vk::ImageSubresourceRange::builder()
+			.aspect_mask(match format {
+				TextureFormat::Depth => vk::ImageAspectFlags::DEPTH, // TODO(Brandon): We need to figure out a good way to handle multiple image views + samplers for depth + stencil attachments
+				_ => vk::ImageAspectFlags::COLOR,
+			})
+			.base_mip_level(0)
+			.level_count(1)
+			.base_array_layer(0)
+			.layer_count(if format.is_cubemap() { 6 } else { 1 })
+			.build();
+
 		let image_view = unsafe {
 			self.raw
 				.create_image_view(
 					&vk::ImageViewCreateInfo::builder()
 						.image(image)
-						.view_type(if format.is_cubemap() {
-							vk::ImageViewType::CUBE
-						} else {
-							vk::ImageViewType::TYPE_2D
-						})
+						.view_type(if format.is_cubemap() { vk::ImageViewType::CUBE } else { vk::ImageViewType::TYPE_2D })
 						.format(vk_format)
-						.subresource_range(
-							vk::ImageSubresourceRange::builder()
-								.aspect_mask(match format {
-									TextureFormat::Depth => vk::ImageAspectFlags::DEPTH,
-									_ => vk::ImageAspectFlags::COLOR,
-								})
-								.base_mip_level(0)
-								.level_count(1)
-								.base_array_layer(0)
-								.layer_count(if format.is_cubemap() { 6 } else { 1 })
-								.build(),
-						),
+						.subresource_range(subresource_range),
 					None,
 				)
 				.expect("Failed to create image view!")
@@ -175,6 +158,7 @@ impl VulkanDevice {
 			image,
 			sampler,
 			image_view,
+			subresource_range,
 
 			allocation,
 			format,

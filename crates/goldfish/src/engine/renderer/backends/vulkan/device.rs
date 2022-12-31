@@ -108,14 +108,7 @@ unsafe extern "system" fn vulkan_debug_callback(
 		CStr::from_ptr(callback_data.p_message).to_string_lossy()
 	};
 
-	println!(
-		"{:?}:{:?} [{} ({})] : {}",
-		message_severity,
-		message_type,
-		message_id_name,
-		&message_id_number.to_string(),
-		message,
-	);
+	println!("{:?}:{:?} [{} ({})] : {}", message_severity, message_type, message_id_name, &message_id_number.to_string(), message,);
 
 	vk::FALSE
 }
@@ -132,20 +125,12 @@ impl VulkanDevice {
 		unsafe {
 			let entry = Entry::linked();
 
-			let mut extension_names =
-				ash_window::enumerate_required_extensions(&window.winit_window)
-					.expect("Failed to get required extensions!")
-					.to_vec();
+			let mut extension_names = ash_window::enumerate_required_extensions(&window.winit_window).expect("Failed to get required extensions!").to_vec();
 			extension_names.push(DebugUtils::name().as_ptr());
 
-			let layer_names = [CStr::from_bytes_with_nul_unchecked(
-				b"VK_LAYER_KHRONOS_validation\0",
-			)];
+			let layer_names = [CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0")];
 
-			let layer_names_raw: Vec<*const c_char> = layer_names
-				.iter()
-				.map(|raw_name| raw_name.as_ptr())
-				.collect();
+			let layer_names_raw: Vec<*const c_char> = layer_names.iter().map(|raw_name| raw_name.as_ptr()).collect();
 
 			let app_name = CStr::from_bytes_with_nul_unchecked(window.name.as_bytes());
 			let app_info = vk::ApplicationInfo::builder()
@@ -161,9 +146,7 @@ impl VulkanDevice {
 				.enabled_extension_names(&extension_names)
 				.flags(vk::InstanceCreateFlags::default());
 
-			let instance = entry
-				.create_instance(&create_info, None)
-				.expect("Failed to create Vulkan instance!");
+			let instance = entry.create_instance(&create_info, None).expect("Failed to create Vulkan instance!");
 
 			let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
 				.message_severity(
@@ -172,20 +155,13 @@ impl VulkanDevice {
 						| vk::DebugUtilsMessageSeverityFlagsEXT::INFO
 						| vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
 				)
-				.message_type(
-					vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-						| vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-						| vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-				)
+				.message_type(vk::DebugUtilsMessageTypeFlagsEXT::GENERAL | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE)
 				.pfn_user_callback(Some(vulkan_debug_callback));
 
 			let debug_utils_loader = DebugUtils::new(&entry, &instance);
-			let debug_callback = debug_utils_loader
-				.create_debug_utils_messenger(&debug_info, None)
-				.expect("Failed to create debug messenger!");
+			let debug_callback = debug_utils_loader.create_debug_utils_messenger(&debug_info, None).expect("Failed to create debug messenger!");
 
-			let surface = ash_window::create_surface(&entry, &instance, &window.winit_window, None)
-				.expect("Failed to create surface!");
+			let surface = ash_window::create_surface(&entry, &instance, &window.winit_window, None).expect("Failed to create surface!");
 
 			let surface_loader = Surface::new(&entry, &instance);
 
@@ -197,26 +173,18 @@ impl VulkanDevice {
 				let mut present_family: Option<u32> = None;
 
 				for (i, prop) in properties.iter().enumerate() {
-					if prop
-						.queue_flags
-						.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
-					{
+					if prop.queue_flags.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE) {
 						graphics_family = Some(i as u32);
 						compute_family = Some(i as u32);
 					} else if prop.queue_flags.contains(vk::QueueFlags::COMPUTE) {
 						compute_family = Some(i as u32);
 					}
 
-					if surface_loader
-						.get_physical_device_surface_support(dev, i as u32, surface)
-						.unwrap_or(false)
-					{
+					if surface_loader.get_physical_device_surface_support(dev, i as u32, surface).unwrap_or(false) {
 						present_family = Some(i as u32);
 					}
 
-					if let (Some(graphics_family), Some(compute_family), Some(present_family)) =
-						(graphics_family, compute_family, present_family)
-					{
+					if let (Some(graphics_family), Some(compute_family), Some(present_family)) = (graphics_family, compute_family, present_family) {
 						return Some(QueueFamilyIndices {
 							graphics_family,
 							compute_family,
@@ -229,10 +197,7 @@ impl VulkanDevice {
 			};
 
 			let rate_device_suitability = |dev: vk::PhysicalDevice| -> u32 {
-				match (
-					find_queue_families(dev),
-					Self::query_swapchain_support_physical_device(&surface_loader, surface, dev),
-				) {
+				match (find_queue_families(dev), Self::query_swapchain_support_physical_device(&surface_loader, surface, dev)) {
 					(Some(_), Some(_swapchain_details)) => {
 						// TODO(Brandon): Add check for device extension support.
 						let mut score = 0;
@@ -252,9 +217,7 @@ impl VulkanDevice {
 				}
 			};
 
-			let physical_devices = instance
-				.enumerate_physical_devices()
-				.expect("Failed to get physical devices!");
+			let physical_devices = instance.enumerate_physical_devices().expect("Failed to get physical devices!");
 
 			if physical_devices.len() == 0 {
 				panic!("No GPUs on this machine support Vulkan!");
@@ -271,8 +234,7 @@ impl VulkanDevice {
 			}
 
 			let physical_device = best_dev.expect("No GPUs on this machine are supported!");
-			let physical_device_properties =
-				instance.get_physical_device_properties(physical_device);
+			let physical_device_properties = instance.get_physical_device_properties(physical_device);
 
 			let queue_family_indices = find_queue_families(physical_device).expect("Failed to get queue family indices from physical device chosen. This shouldn't ever happen!");
 
@@ -284,12 +246,7 @@ impl VulkanDevice {
 			let queue_priorities = [1.0];
 			let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = queue_indices
 				.iter()
-				.map(|index| {
-					vk::DeviceQueueCreateInfo::builder()
-						.queue_family_index(*index)
-						.queue_priorities(&queue_priorities)
-						.build()
-				})
+				.map(|index| vk::DeviceQueueCreateInfo::builder().queue_family_index(*index).queue_priorities(&queue_priorities).build())
 				.collect();
 
 			let device_extension_names_raw = [Swapchain::name().as_ptr()];
@@ -304,21 +261,13 @@ impl VulkanDevice {
 				.enabled_extension_names(&device_extension_names_raw)
 				.enabled_features(&features);
 
-			let device = instance
-				.create_device(physical_device, &device_create_info, None)
-				.expect("Failed to create logical device!");
+			let device = instance.create_device(physical_device, &device_create_info, None).expect("Failed to create logical device!");
 
-			let graphics_queue = Arc::new(Mutex::new(
-				device.get_device_queue(queue_family_indices.graphics_family, 0),
-			));
+			let graphics_queue = Arc::new(Mutex::new(device.get_device_queue(queue_family_indices.graphics_family, 0)));
 
-			let compute_queue = Arc::new(Mutex::new(
-				device.get_device_queue(queue_family_indices.compute_family, 0),
-			));
+			let compute_queue = Arc::new(Mutex::new(device.get_device_queue(queue_family_indices.compute_family, 0)));
 
-			let present_queue = Arc::new(Mutex::new(
-				device.get_device_queue(queue_family_indices.present_family, 0),
-			));
+			let present_queue = Arc::new(Mutex::new(device.get_device_queue(queue_family_indices.present_family, 0)));
 
 			let vma = Arc::new(Mutex::new(Some(
 				vma::Allocator::new(&vma::AllocatorCreateDesc {
@@ -332,22 +281,18 @@ impl VulkanDevice {
 			)));
 
 			let depth_formats = [
-				vk::Format::D32_SFLOAT_S8_UINT,
+				// vk::Format::D32_SFLOAT_S8_UINT,
 				vk::Format::D32_SFLOAT,
-				vk::Format::D24_UNORM_S8_UINT,
-				vk::Format::D16_UNORM_S8_UINT,
+				// vk::Format::D24_UNORM_S8_UINT,
+				// vk::Format::D16_UNORM_S8_UINT,
 				vk::Format::D16_UNORM,
 			];
 
 			let mut depth_format: Option<vk::Format> = None;
 			for format in depth_formats {
-				let properties =
-					instance.get_physical_device_format_properties(physical_device, format);
+				let properties = instance.get_physical_device_format_properties(physical_device, format);
 
-				if properties
-					.optimal_tiling_features
-					.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
-				{
+				if properties.optimal_tiling_features.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT) {
 					depth_format = Some(format);
 					break;
 				}
@@ -395,10 +340,7 @@ impl VulkanDevice {
 	}
 
 	pub fn pad_size(&self, size: u64) -> u64 {
-		let alignment = self
-			.physical_device_properties
-			.limits
-			.min_uniform_buffer_offset_alignment;
+		let alignment = self.physical_device_properties.limits.min_uniform_buffer_offset_alignment;
 		if alignment <= 0 {
 			return size;
 		}
@@ -409,13 +351,7 @@ impl VulkanDevice {
 		fence.reset(self);
 		unsafe {
 			self.raw
-				.queue_submit(
-					*self.graphics_queue.lock().unwrap(),
-					&[vk::SubmitInfo::builder()
-						.command_buffers(&[command_buffer])
-						.build()],
-					fence.raw,
-				)
+				.queue_submit(*self.graphics_queue.lock().unwrap(), &[vk::SubmitInfo::builder().command_buffers(&[command_buffer]).build()], fence.raw)
 				.expect("Failed to submit to graphics queue!");
 		}
 	}
@@ -424,47 +360,30 @@ impl VulkanDevice {
 		fence.reset(self);
 		unsafe {
 			self.raw
-				.queue_submit(
-					*self.compute_queue.lock().unwrap(),
-					&[vk::SubmitInfo::builder()
-						.command_buffers(&[command_buffer])
-						.build()],
-					fence.raw,
-				)
+				.queue_submit(*self.compute_queue.lock().unwrap(), &[vk::SubmitInfo::builder().command_buffers(&[command_buffer]).build()], fence.raw)
 				.expect("Failed to submit to compute queue!");
 		}
 	}
 
-	fn query_swapchain_support_physical_device(
-		surface_loader: &Surface,
-		surface: vk::SurfaceKHR,
-		dev: vk::PhysicalDevice,
-	) -> Option<SwapchainDetails> {
+	fn query_swapchain_support_physical_device(surface_loader: &Surface, surface: vk::SurfaceKHR, dev: vk::PhysicalDevice) -> Option<SwapchainDetails> {
 		unsafe {
 			match (
 				surface_loader.get_physical_device_surface_capabilities(dev, surface),
 				surface_loader.get_physical_device_surface_formats(dev, surface),
 				surface_loader.get_physical_device_surface_present_modes(dev, surface),
 			) {
-				(Ok(capabilities), Ok(surface_formats), Ok(present_modes)) => {
-					Some(SwapchainDetails {
-						capabilities,
-						surface_formats,
-						present_modes,
-					})
-				}
+				(Ok(capabilities), Ok(surface_formats), Ok(present_modes)) => Some(SwapchainDetails {
+					capabilities,
+					surface_formats,
+					present_modes,
+				}),
 				_ => None,
 			}
 		}
 	}
 
 	pub fn query_swapchain_details(&self) -> SwapchainDetails {
-		Self::query_swapchain_support_physical_device(
-			&self.surface_loader,
-			self.surface,
-			self.physical_device,
-		)
-		.expect("Failed to get physical device swapchain support details!")
+		Self::query_swapchain_support_physical_device(&self.surface_loader, self.surface, self.physical_device).expect("Failed to get physical device swapchain support details!")
 	}
 
 	pub fn get_queue_family_indices(&self) -> &QueueFamilyIndices {
@@ -487,8 +406,7 @@ impl VulkanDevice {
 
 			self.raw.destroy_device(None);
 			self.surface_loader.destroy_surface(self.surface, None);
-			self.debug_utils_loader
-				.destroy_debug_utils_messenger(self.debug_callback, None);
+			self.debug_utils_loader.destroy_debug_utils_messenger(self.debug_callback, None);
 			self.instance.destroy_instance(None);
 		}
 	}
@@ -537,8 +455,7 @@ impl VulkanDevice {
 					self.raw.destroy_pipeline_layout(pipeline_layout, None);
 				}
 				VulkanDestructor::DescriptorSetLayout(descriptor_set_layout) => {
-					self.raw
-						.destroy_descriptor_set_layout(descriptor_set_layout, None);
+					self.raw.destroy_descriptor_set_layout(descriptor_set_layout, None);
 				}
 				VulkanDestructor::DescriptorPool(descriptor_pool) => {
 					self.raw.destroy_descriptor_pool(descriptor_pool, None);

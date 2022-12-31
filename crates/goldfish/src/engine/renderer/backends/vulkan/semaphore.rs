@@ -10,10 +10,7 @@ impl VulkanDevice {
 	pub fn create_semaphore(&self) -> VulkanSemaphore {
 		tracy::span!();
 		unsafe {
-			let raw = self
-				.raw
-				.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-				.expect("Failed to create VulkanSemaphore");
+			let raw = self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).expect("Failed to create VulkanSemaphore");
 			VulkanSemaphore { raw }
 		}
 	}

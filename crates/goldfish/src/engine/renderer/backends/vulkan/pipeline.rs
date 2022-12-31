@@ -57,8 +57,7 @@ impl VulkanDevice {
 		face_cull: bool,
 		push_constant_bytes: usize,
 	) -> VulkanPipeline {
-		let mut layout_create_info =
-			vk::PipelineLayoutCreateInfo::builder().set_layouts(descriptor_layouts);
+		let mut layout_create_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(descriptor_layouts);
 
 		let push_constant_range = vk::PushConstantRange {
 			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
@@ -67,20 +66,12 @@ impl VulkanDevice {
 		};
 
 		if push_constant_bytes > 0 {
-			layout_create_info =
-				layout_create_info.push_constant_ranges(std::slice::from_ref(&push_constant_range));
+			layout_create_info = layout_create_info.push_constant_ranges(std::slice::from_ref(&push_constant_range));
 		}
 
-		let pipeline_layout = unsafe {
-			self.raw
-				.create_pipeline_layout(&layout_create_info, None)
-				.expect("Failed to create pipeline layout!")
-		};
+		let pipeline_layout = unsafe { self.raw.create_pipeline_layout(&layout_create_info, None).expect("Failed to create pipeline layout!") };
 
-		let entry_names = vec![
-			CString::new(VS_MAIN).unwrap(),
-			CString::new(PS_MAIN).unwrap(),
-		];
+		let entry_names = vec![CString::new(VS_MAIN).unwrap(), CString::new(PS_MAIN).unwrap()];
 		let shader_stage_infos = [
 			vk::PipelineShaderStageCreateInfo::builder()
 				.module(vs.module)
@@ -94,10 +85,7 @@ impl VulkanDevice {
 				.build(),
 		];
 		let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::builder()
-			.vertex_binding_descriptions(&[vk::VertexInputBindingDescription::builder()
-				.binding(0)
-				.stride(std::mem::size_of::<Vertex>() as u32)
-				.build()])
+			.vertex_binding_descriptions(&[vk::VertexInputBindingDescription::builder().binding(0).stride(std::mem::size_of::<Vertex>() as u32).build()])
 			// TODO(Brandon): Don't hard-code this.
 			.vertex_attribute_descriptions(&[
 				vk::VertexInputAttributeDescription {
@@ -133,24 +121,15 @@ impl VulkanDevice {
 			])
 			.build();
 
-		let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
-			.topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-			.build();
+		let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo::builder().topology(vk::PrimitiveTopology::TRIANGLE_LIST).build();
 
-		let viewport_state_info = vk::PipelineViewportStateCreateInfo::builder()
-			.viewport_count(1)
-			.scissor_count(1)
-			.build();
+		let viewport_state_info = vk::PipelineViewportStateCreateInfo::builder().viewport_count(1).scissor_count(1).build();
 
 		let rasterization_info = vk::PipelineRasterizationStateCreateInfo {
 			front_face: vk::FrontFace::COUNTER_CLOCKWISE,
 			line_width: 1.0,
 			polygon_mode: vk::PolygonMode::FILL,
-			cull_mode: if face_cull {
-				vk::CullModeFlags::BACK
-			} else {
-				vk::CullModeFlags::NONE
-			},
+			cull_mode: if face_cull { vk::CullModeFlags::BACK } else { vk::CullModeFlags::NONE },
 			..Default::default()
 		};
 
@@ -171,9 +150,12 @@ impl VulkanDevice {
 			depth_test_enable: 1,
 			depth_write_enable: if depth_write { 1 } else { 0 },
 			depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
+			depth_bounds_test_enable: 0,
 			front: noop_stencil_state,
 			back: noop_stencil_state,
+			min_depth_bounds: 0.0,
 			max_depth_bounds: 1.0,
+			stencil_test_enable: 0,
 			..Default::default()
 		};
 
@@ -186,19 +168,14 @@ impl VulkanDevice {
 				src_alpha_blend_factor: vk::BlendFactor::ZERO,
 				dst_alpha_blend_factor: vk::BlendFactor::ZERO,
 				alpha_blend_op: vk::BlendOp::ADD,
-				color_write_mask: vk::ColorComponentFlags::R
-					| vk::ColorComponentFlags::G
-					| vk::ColorComponentFlags::B
-					| vk::ColorComponentFlags::A,
+				color_write_mask: vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B | vk::ColorComponentFlags::A,
 			};
 			color_attachments_count
 		];
-		let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
-			.attachments(&color_blend_attachment_states);
+		let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder().attachments(&color_blend_attachment_states);
 
 		let dynamic_state = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-		let dynamic_state_info =
-			vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_state);
+		let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_state);
 
 		let graphics_pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
 			.stages(&shader_stage_infos)
@@ -214,37 +191,19 @@ impl VulkanDevice {
 			.render_pass(render_pass);
 		let pipeline = unsafe {
 			self.raw
-				.create_graphics_pipelines(
-					vk::PipelineCache::null(),
-					&[graphics_pipeline_info.build()],
-					None,
-				)
+				.create_graphics_pipelines(vk::PipelineCache::null(), &[graphics_pipeline_info.build()], None)
 				.expect("Failed to create graphics pipeline!")
 		}[0];
 
-		VulkanPipeline {
-			pipeline,
-			pipeline_layout,
-		}
+		VulkanPipeline { pipeline, pipeline_layout }
 	}
 
 	pub fn destroy_pipeline(&mut self, pipeline: VulkanPipeline) {
-		self.queue_destruction(&mut [
-			VulkanDestructor::PipelineLayout(pipeline.pipeline_layout),
-			VulkanDestructor::Pipeline(pipeline.pipeline),
-		]);
+		self.queue_destruction(&mut [VulkanDestructor::PipelineLayout(pipeline.pipeline_layout), VulkanDestructor::Pipeline(pipeline.pipeline)]);
 	}
 
-	fn create_descriptor_set_layouts(
-		&self,
-		descriptor_sets: &StageDescriptorSetLayouts,
-		stage_flags: vk::ShaderStageFlags,
-	) -> Vec<(vk::DescriptorSetLayout, HashMap<u32, vk::DescriptorType>)> {
-		let set_count = descriptor_sets
-			.iter()
-			.map(|(set_index, _)| *set_index + 1)
-			.max()
-			.unwrap_or(0u32);
+	fn create_descriptor_set_layouts(&self, descriptor_sets: &StageDescriptorSetLayouts, stage_flags: vk::ShaderStageFlags) -> Vec<(vk::DescriptorSetLayout, HashMap<u32, vk::DescriptorType>)> {
+		let set_count = descriptor_sets.iter().map(|(set_index, _)| *set_index + 1).max().unwrap_or(0u32);
 
 		(0..set_count)
 			.map(|set_index| {
@@ -261,15 +220,9 @@ impl VulkanDevice {
 									.binding(*binding_index)
 									.descriptor_count(1) // TODO
 									.descriptor_type(match binding.ty {
-										rspirv_reflect::DescriptorType::UNIFORM_BUFFER => {
-											vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
-										}
-										rspirv_reflect::DescriptorType::UNIFORM_TEXEL_BUFFER => {
-											vk::DescriptorType::UNIFORM_TEXEL_BUFFER
-										}
-										rspirv_reflect::DescriptorType::STORAGE_IMAGE => {
-											vk::DescriptorType::STORAGE_IMAGE
-										}
+										rspirv_reflect::DescriptorType::UNIFORM_BUFFER => vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+										rspirv_reflect::DescriptorType::UNIFORM_TEXEL_BUFFER => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+										rspirv_reflect::DescriptorType::STORAGE_IMAGE => vk::DescriptorType::STORAGE_IMAGE,
 										// TODO
 										// rspirv_reflect::DescriptorType::STORAGE_BUFFER => {
 										//     if binding.name.ends_with("_dyn") {
@@ -278,9 +231,7 @@ impl VulkanDevice {
 										//         vk::DescriptorType::STORAGE_BUFFER
 										//     }
 										// }
-										rspirv_reflect::DescriptorType::STORAGE_BUFFER_DYNAMIC => {
-											vk::DescriptorType::STORAGE_BUFFER_DYNAMIC
-										}
+										rspirv_reflect::DescriptorType::STORAGE_BUFFER_DYNAMIC => vk::DescriptorType::STORAGE_BUFFER_DYNAMIC,
 										_ => unimplemented!("{:?}", binding),
 									})
 									.stage_flags(stage_flags)
@@ -350,29 +301,15 @@ impl VulkanDevice {
 
 					let set_layout = unsafe {
 						self.raw
-							.create_descriptor_set_layout(
-								&vk::DescriptorSetLayoutCreateInfo::builder()
-									.bindings(&bindings)
-									.build(),
-								None,
-							)
+							.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings).build(), None)
 							.expect("Failed to create descriptor set layout!")
 					};
 
-					(
-						set_layout,
-						bindings
-							.iter()
-							.map(|binding| (binding.binding, binding.descriptor_type))
-							.collect(),
-					)
+					(set_layout, bindings.iter().map(|binding| (binding.binding, binding.descriptor_type)).collect())
 				} else {
 					let set_layout = unsafe {
 						self.raw
-							.create_descriptor_set_layout(
-								&vk::DescriptorSetLayoutCreateInfo::builder().build(),
-								None,
-							)
+							.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::builder().build(), None)
 							.expect("Failed to create descriptor set layout!")
 					};
 					(set_layout, Default::default())
@@ -395,16 +332,8 @@ fn merge_stage_layouts(stages: Vec<StageDescriptorSetLayouts>) -> StageDescripto
 						match existing.entry(binding_idx) {
 							Entry::Occupied(existing) => {
 								let existing = existing.get();
-								assert_eq!(
-									existing.ty, binding.ty,
-									"binding idx: {}, name: {:?}",
-									binding_idx, binding.name
-								);
-								assert_eq!(
-									existing.name, binding.name,
-									"binding idx: {}, name: {:?}",
-									binding_idx, binding.name
-								);
+								assert_eq!(existing.ty, binding.ty, "binding idx: {}, name: {:?}", binding_idx, binding.name);
+								assert_eq!(existing.name, binding.name, "binding idx: {}, name: {:?}", binding_idx, binding.name);
 							}
 							Entry::Vacant(vacant) => {
 								vacant.insert(binding);
@@ -432,25 +361,14 @@ impl VulkanSwapchain {
 		face_cull: bool,
 		push_constant_bytes: usize,
 	) -> VulkanPipeline {
-		self.device.create_raster_pipeline_impl(
-			vs,
-			ps,
-			descriptor_layouts,
-			self.render_pass,
-			1usize,
-			depth_write,
-			face_cull,
-			push_constant_bytes,
-		)
+		self.device
+			.create_raster_pipeline_impl(vs, ps, descriptor_layouts, self.render_pass, 1usize, depth_write, face_cull, push_constant_bytes)
 	}
 }
 
 impl VulkanGraphicsContext {
 	pub fn bind_raster_pipeline(&self, pipeline: &VulkanPipeline) {
 		tracy::span!();
-		self.queue_raster_cmd(VulkanRasterCmd::BindPipeline(
-			vk::PipelineBindPoint::GRAPHICS,
-			pipeline.pipeline,
-		));
+		self.queue_raster_cmd(VulkanRasterCmd::BindPipeline(vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline));
 	}
 }
