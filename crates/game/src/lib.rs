@@ -1,6 +1,6 @@
 include!(concat!(env!("OUT_DIR"), "/materials.rs"));
 
-use goldfish::build::UniformBuffer;
+use goldfish::build::{CBuffer, StructuredBuffer};
 use goldfish::game::GameLib;
 use goldfish::package::{AssetType, Package};
 use goldfish::renderer;
@@ -56,8 +56,11 @@ const DEPTH_DESC_INFO: &'static DescriptorSetInfo = &DescriptorSetInfo {
 	bindings: phf::phf_map! {
 		0u32 => DescriptorBindingType::Texture2D,
 		1u32 => DescriptorBindingType::SamplerState,
+		2u32 => DescriptorBindingType::CBuffer,
 	},
 };
+
+const Z_NEAR: f32 = 0.01;
 
 struct Game {
 	vs: Shader,
@@ -67,6 +70,7 @@ struct Game {
 	vs_fullscreen: Shader,
 	ps_fullscreen: Shader,
 	ps_depth_debug: Shader,
+	depth_debug_cbuffer: GpuBuffer,
 	cube: Mesh,
 	camera_uniform: GpuBuffer,
 	model_uniform: GpuBuffer,
@@ -124,7 +128,7 @@ impl Game {
 				matrix: Mat4::from_scale_rotation_translation(self.cube_transform.scale, self.cube_transform.rotation, self.cube_transform.position),
 			};
 
-			let proj = Mat4::perspective_infinite_reverse_lh(1.6, engine.window.get_size().aspect() as f32, 0.01);
+			let proj = Mat4::perspective_infinite_reverse_lh(1.6, engine.window.get_size().aspect() as f32, Z_NEAR);
 
 			let view = Mat4::look_at_lh(
 				self.camera_transform.position,
@@ -253,12 +257,12 @@ impl Game {
 			// 	sampler_pass.cmd_end_render_pass();
 			// }
 			{
-				let mut post_processing_pass = render_graph.add_pass("fullscreen");
+				let mut depth_debug_pass = render_graph.add_pass("depth_debug");
 
-				let render_pass = post_processing_pass.add_output_render_pass();
+				let render_pass = depth_debug_pass.add_output_render_pass();
 
-				let pipeline = post_processing_pass.add_raster_pipeline(RasterPipelineDesc {
-					name: "Fullscreen Pipeline",
+				let pipeline = depth_debug_pass.add_raster_pipeline(RasterPipelineDesc {
+					name: "Depth Debug Pipeline",
 					vs: &self.vs_fullscreen,
 					ps: Some(&self.ps_depth_debug),
 					descriptor_layouts: &[DEPTH_DESC_INFO],
@@ -271,22 +275,23 @@ impl Game {
 					polygon_mode: PolygonMode::Fill,
 				});
 
-				let descriptor0 = post_processing_pass.add_descriptor_set(DescriptorDesc {
-					name: "Fullscreen Descriptor 0",
+				let descriptor0 = depth_debug_pass.add_descriptor_set(DescriptorDesc {
+					name: "Depth Debug Descriptor 0",
 					descriptor_layout: DEPTH_DESC_INFO,
 					bindings: &mut [
 						(0, DescriptorBindingDesc::Attachment(depth_prepass_attachment.read())),
 						(1, DescriptorBindingDesc::Attachment(depth_prepass_attachment.read())),
+						(2, DescriptorBindingDesc::ImportedBuffer(&self.depth_debug_cbuffer)),
 					],
 				});
 
-				post_processing_pass.cmd_begin_render_pass(render_pass, &[ClearValue::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }]);
+				depth_debug_pass.cmd_begin_render_pass(render_pass, &[ClearValue::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }]);
 
-				post_processing_pass.cmd_bind_raster_pipeline(pipeline);
-				post_processing_pass.cmd_bind_raster_descriptor(descriptor0, 0, pipeline);
-				post_processing_pass.cmd_draw(3, 1, 0, 0);
+				depth_debug_pass.cmd_bind_raster_pipeline(pipeline);
+				depth_debug_pass.cmd_bind_raster_descriptor(descriptor0, 0, pipeline);
+				depth_debug_pass.cmd_draw(3, 1, 0, 0);
 
-				post_processing_pass.cmd_end_render_pass();
+				depth_debug_pass.cmd_end_render_pass();
 			}
 
 			render_graph.execute(graphics_context, graphics_device);
@@ -301,6 +306,7 @@ impl Game {
 
 		graphics_device.destroy_buffer(self.camera_uniform);
 		graphics_device.destroy_buffer(self.model_uniform);
+		graphics_device.destroy_buffer(self.depth_debug_cbuffer);
 		graphics_device.destroy_mesh(self.cube);
 		graphics_device.destroy_upload_context(self.upload_context);
 		graphics_device.destroy_shader(self.vs);
@@ -333,6 +339,14 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 
 	let model_uniform = upload_context.create_buffer(common_inc::Model::size(), MemoryLocation::CpuToGpu, BufferUsage::UniformBuffer, None, None);
 
+	let depth_debug_cbuffer = upload_context.create_buffer(
+		debug_depth::NearPlane::size(),
+		MemoryLocation::CpuToGpu,
+		BufferUsage::UniformBuffer,
+		None,
+		Some(&debug_depth::NearPlane { z_near: Z_NEAR, z_scale: 0.02 }.as_buffer()),
+	);
+
 	let Package::Mesh(mesh_package) = engine.read_package(
 			uuid!("471cb8ab-2bd0-4e91-9ea9-0d0573cb9e0a"),
 			AssetType::Mesh,
@@ -353,6 +367,7 @@ extern "C" fn on_load(engine: &mut GoldfishEngine) {
 		vs_fullscreen,
 		ps_fullscreen,
 		ps_depth_debug,
+		depth_debug_cbuffer,
 		cube,
 		upload_context,
 		camera_uniform,

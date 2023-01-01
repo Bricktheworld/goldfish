@@ -50,7 +50,7 @@ impl<'a> DxcIncludeHandler for ShaderIncludeHandler<'a> {
 				Some(content)
 			}
 			Err(_) => {
-				println!("Failed to find included file {}", full_path.to_str().unwrap());
+				println!("cargo:warning=Compiling Failed to find included file {}", full_path.to_str().unwrap());
 				None
 			}
 		}
@@ -135,7 +135,18 @@ fn compile_hlsl(path: &Path, src: &str, disable_optimizations: bool) -> Result<(
 		None
 	};
 
-	Ok((asts, CompiledShaders { vs, ps, cs: None }))
+	let cs = if src.contains(CS_MAIN) {
+		let cs_ir = compile(CS_MAIN, "cs_6_0", config, &[])?;
+
+		let module = spirv::Module::from_words(&cs_ir);
+		let ast = spirv::Ast::<hlsl::Target>::parse(&module).map_err(move |err| BuildError::ShaderReflection(path.to_path_buf(), err))?;
+		asts.push(ast);
+		Some(cs_ir)
+	} else {
+		None
+	};
+
+	Ok((asts, CompiledShaders { vs, ps, cs }))
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -150,7 +161,7 @@ enum MemberType {
 impl From<Type> for MemberType {
 	fn from(ty: Type) -> Self {
 		match ty {
-			Type::Float { vecsize: 1, columns: 0, .. } => MemberType::F32,
+			Type::Float { vecsize: 1, columns: 1, .. } => MemberType::F32,
 			Type::Float { vecsize: 2, columns: 1, .. } => MemberType::Vec2,
 			Type::Float { vecsize: 3, columns: 1, .. } => MemberType::Vec3,
 			Type::Float { vecsize: 4, columns: 1, .. } => MemberType::Vec4,
@@ -177,9 +188,11 @@ struct Struct {
 
 #[derive(Debug)]
 enum DescriptorBinding {
-	UniformBuffer { name: String, struct_info: Struct },
-	Sampler { name: String },
-	SampledImage { name: String },
+	CBuffer { name: String, struct_info: Struct },
+	StructuredBuffer { name: String, struct_info: Struct },
+	RWStructuredBuffer { name: String, struct_info: Struct },
+	SamplerState { name: String },
+	Texture2D { name: String },
 }
 
 type DescriptorBindings = HashMap<u32, DescriptorBinding>;
@@ -219,9 +232,63 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 
 			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::UniformBuffer {
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::CBuffer {
 				name,
 				struct_info: Struct { ty_name, members, size },
+			});
+		}
+
+		for resource in resources.storage_buffers {
+			println!("cargo:warning=Base type id {:?}", resource.base_type_id);
+			let ty_name = ast.get_name(resource.base_type_id + 1).unwrap();
+			let name = ast.get_name(resource.id).unwrap();
+
+			// let ty_name = if let Some(last) = ty_name.rfind(".") { ty_name[last + 1..].to_owned() } else { ty_name };
+
+			let resource_type = ast.get_type(resource.base_type_id).unwrap();
+
+			let Type::Struct { ref member_types, .. } = resource_type else {
+                unimplemented!(
+                    "Storage buffers must be a struct! {:?}",
+                    resource_type
+                );
+            };
+
+			let base_type_id = member_types[0];
+
+			let Type::Struct {ref member_types, ..} = ast.get_type(base_type_id).unwrap() else {
+                unimplemented!("Storage buffer expected to have nested struct for some reason :/");
+            };
+
+			let size = ast.get_decoration(base_type_id, Decoration::ArrayStride).unwrap();
+
+			let members = member_types
+				.iter()
+				.enumerate()
+				.map(|(i, id)| StructMember {
+					// TODO(Brandon): This cannot POSSIBLY be correct, but for some reason it's working :/
+					name: ast.get_member_name(resource.base_type_id + 1, i as u32).unwrap(),
+					ty: ast.get_type(*id).unwrap().into(),
+					offset: ast.get_member_decoration(resource.base_type_id + 1, i as u32, Decoration::Offset).unwrap(),
+				})
+				.collect::<Vec<_>>();
+
+			let set = ast.get_decoration(resource.id, Decoration::DescriptorSet).unwrap();
+
+			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
+
+			let writeable = ast.get_decoration(resource.id, Decoration::NonWritable).unwrap() == 0;
+
+			descriptors.entry(set).or_default().entry(binding).or_insert(if writeable {
+				DescriptorBinding::StructuredBuffer {
+					name,
+					struct_info: Struct { ty_name, members, size },
+				}
+			} else {
+				DescriptorBinding::RWStructuredBuffer {
+					name,
+					struct_info: Struct { ty_name, members, size },
+				}
 			});
 		}
 
@@ -232,7 +299,7 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 
 			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::Sampler { name });
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::SamplerState { name });
 		}
 
 		for resource in resources.separate_images {
@@ -242,7 +309,7 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 
 			let binding = ast.get_decoration(resource.id, Decoration::Binding).unwrap();
 
-			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::SampledImage { name });
+			descriptors.entry(set).or_default().entry(binding).or_insert(DescriptorBinding::Texture2D { name });
 		}
 	}
 	return descriptors;
@@ -308,22 +375,100 @@ pub struct Descriptor{0} {{
 			.map(|(_, info)| format!(
 				"pub {}: {},\n",
 				match info {
-					DescriptorBinding::UniformBuffer { name, .. } => name,
-					DescriptorBinding::Sampler { name } => name,
-					DescriptorBinding::SampledImage { name } => name,
+					DescriptorBinding::CBuffer { name, .. } => name,
+					DescriptorBinding::StructuredBuffer { name, .. } => name,
+					DescriptorBinding::RWStructuredBuffer { name, .. } => name,
+					DescriptorBinding::SamplerState { name } => name,
+					DescriptorBinding::Texture2D { name } => name,
 				},
 				match info {
-					DescriptorBinding::UniformBuffer {
+					DescriptorBinding::CBuffer {
 						struct_info: Struct { ty_name, .. }, ..
 					} => ty_name,
-					_ => "u32",
+					DescriptorBinding::StructuredBuffer {
+						struct_info: Struct { ty_name, .. }, ..
+					} => ty_name,
+					DescriptorBinding::RWStructuredBuffer {
+						struct_info: Struct { ty_name, .. }, ..
+					} => ty_name,
+					_ => "u8",
 				},
 			))
 			.collect::<String>(),
 	)
 }
 
-fn generate_struct_rust(struct_info: &Struct) -> String {
+fn generate_cbuffer_rust(struct_info: &Struct) -> String {
+	fn generate_struct_rust(struct_info: &Struct) -> String {
+		format!(
+			"
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct {0} {{
+{1}
+}}
+
+unsafe impl bytemuck::Pod for {0} {{}}
+unsafe impl bytemuck::Zeroable for {0} {{}}
+
+",
+			struct_info.ty_name,
+			struct_info
+				.members
+				.iter()
+				.map(|member| format!(
+					"pub {}: {},\n",
+					member.name,
+					match member.ty {
+						MemberType::F32 => "f32",
+						MemberType::Vec2 => "glam::Vec2",
+						MemberType::Vec3 => "glam::Vec3",
+						MemberType::Vec4 => "glam::Vec4",
+						MemberType::Mat3 => "glam::Mat3",
+						MemberType::Mat4 => "glam::Mat4",
+					}
+				))
+				.collect::<String>(),
+		)
+	}
+
+	format!(
+		"
+{1}
+
+impl goldfish::build::CBuffer<{2}> for {0} {{
+    fn size() -> usize {{
+        {2}
+    }}
+
+	fn as_buffer(&self) -> [u8; {2}] {{
+        let mut output: [u8; {2}] = [0; {2}];
+        {3}
+        output
+    }}
+}}
+",
+		struct_info.ty_name,
+		generate_struct_rust(struct_info),
+		struct_info.size,
+		struct_info
+			.members
+			.iter()
+			.map(|member| format!(
+				"
+let slice = {0};
+output[{1}..{1} + slice.len()].clone_from_slice(slice);
+",
+				match member.ty {
+					MemberType::F32 => format!("&self.{0}.to_ne_bytes()", member.name),
+					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 => format!("bytemuck::cast_slice::<_, u8>(self.{0}.as_ref())", member.name),
+				},
+				member.offset,
+			))
+			.collect::<String>(),
+	)
+}
+
+fn generate_structured_buffer_rust(struct_info: &Struct) -> String {
 	format!(
 		"
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -334,15 +479,18 @@ pub struct {0} {{
 unsafe impl bytemuck::Pod for {0} {{}}
 unsafe impl bytemuck::Zeroable for {0} {{}}
 
-impl goldfish::build::UniformBuffer<{2}> for {0} {{
+impl goldfish::build::StructuredBuffer<{2}> for {0} {{
     fn size() -> usize {{
         {2}
     }}
 
-	fn as_buffer(&self) -> [u8; {2}] {{
-        let mut output: [u8; {2}] = [0; {2}];
-        {3}
-        output
+	fn copy_to_raw(src: &[Self], dst: &mut [u8]) {{
+        assert!(dst.len() >= Self::size() * src.len());
+        for (i, buf) in src.iter().enumerate()
+        {{
+            let dst = &mut dst[i * Self::size()..];
+            {3}
+        }}
     }}
 }}
 ",
@@ -369,10 +517,14 @@ impl goldfish::build::UniformBuffer<{2}> for {0} {{
 			.iter()
 			.map(|member| format!(
 				"
-let slice = bytemuck::cast_slice::<_, u8>(self.{0}.as_ref());
-output[{1}..{1} + slice.len()].clone_from_slice(slice);
+let slice = {0};
+dst[{1}..{1} + slice.len()].clone_from_slice(slice);
 ",
-				member.name, member.offset,
+				match member.ty {
+					MemberType::F32 => format!("&buf.{0}.to_ne_bytes()", member.name),
+					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 => format!("bytemuck::cast_slice::<_, u8>(buf.{0}.as_ref())", member.name),
+				},
+				member.offset,
 			))
 			.collect::<String>(),
 	)
@@ -423,6 +575,18 @@ fn compile_shaders(out_dir: &Path, asset_dir: &Path, descriptor_layouts: &HashMa
 				);
 			}
 
+			if let Some(ref cs) = compiled_shaders.cs {
+				let bytes = cs.iter().flat_map(|code| code.to_ne_bytes()).collect::<Vec<_>>();
+
+				let out = out_dir.join(asset_path.file_name().unwrap()).with_extension("cs");
+				std::fs::write(&out, bytes).map_err(move |err| BuildError::Filesystem(err))?;
+
+				shader_ir_consts += &format!(
+					"pub const CS_BYTES: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{}\"));\n",
+					out.file_name().unwrap().to_str().unwrap()
+				);
+			}
+
 			let descriptors = generate_descriptors(&mut asts);
 
 			let included_sets = descriptor_layouts
@@ -439,17 +603,28 @@ fn compile_shaders(out_dir: &Path, asset_dir: &Path, descriptor_layouts: &HashMa
 				.collect::<HashMap<u32, String>>();
 
 			let mut descriptor_decls: Vec<String> = Default::default();
-			let mut uniform_decls: Vec<Struct> = Default::default();
+			let mut cbuffer_decls: Vec<Struct> = Default::default();
+			let mut structured_buffer_decls: Vec<Struct> = Default::default();
 
 			for (set, bindings) in descriptors {
 				if let Some(descriptor_type) = included_sets.get(&set) {
 					descriptor_decls.push(format!("\npub type Descriptor{} = {};\n", set, descriptor_type));
 				} else {
-					uniform_decls.append(
+					cbuffer_decls.append(
 						&mut bindings
 							.iter()
 							.flat_map(|(_, info)| match info {
-								DescriptorBinding::UniformBuffer { struct_info, .. } => Some(struct_info.clone()),
+								DescriptorBinding::CBuffer { struct_info, .. } => Some(struct_info.clone()),
+								_ => None,
+							})
+							.collect(),
+					);
+					structured_buffer_decls.append(
+						&mut bindings
+							.iter()
+							.flat_map(|(_, info)| match info {
+								DescriptorBinding::RWStructuredBuffer { struct_info, .. } => Some(struct_info.clone()),
+								DescriptorBinding::StructuredBuffer { struct_info, .. } => Some(struct_info.clone()),
 								_ => None,
 							})
 							.collect(),
@@ -459,7 +634,7 @@ fn compile_shaders(out_dir: &Path, asset_dir: &Path, descriptor_layouts: &HashMa
 			}
 
 			use itertools::Itertools;
-			let uniform_decls = uniform_decls.into_iter().unique().collect::<Vec<_>>();
+			let cbuffer_decls = cbuffer_decls.into_iter().unique().collect::<Vec<_>>();
 
 			generated += &format!(
 				"
@@ -468,12 +643,14 @@ pub mod {} {{
 {}
 
 {}
+{}
 }}
 ",
 				asset_path.file_stem().unwrap().to_str().unwrap(),
 				&shader_ir_consts,
 				descriptor_decls.join(""),
-				uniform_decls.iter().map(|struct_info| generate_struct_rust(struct_info)).collect::<String>(),
+				cbuffer_decls.iter().map(|struct_info| generate_cbuffer_rust(struct_info)).collect::<String>(),
+				structured_buffer_decls.iter().map(|struct_info| generate_structured_buffer_rust(struct_info)).collect::<String>(),
 			);
 		}
 	}
@@ -487,12 +664,26 @@ fn main() {
 	match parse_shader_includes(&Path::new(SHADERS_DIR)) {
 		Err(err) => panic!("Failed to parse shader includes! {}", err),
 		Ok(descriptor_layouts) => {
-			let uniform_decls = descriptor_layouts
+			let cbuffer_decls = descriptor_layouts
 				.iter()
 				.flat_map(|(_, sets)| {
 					sets.iter().flat_map(|(_, bindings)| {
 						bindings.iter().map(|(_, info)| match info {
-							DescriptorBinding::UniformBuffer { struct_info, .. } => Some(struct_info),
+							DescriptorBinding::CBuffer { struct_info, .. } => Some(struct_info),
+							_ => None,
+						})
+					})
+				})
+				.flatten()
+				.collect::<Vec<&Struct>>();
+
+			let structured_buffer_decls = descriptor_layouts
+				.iter()
+				.flat_map(|(_, sets)| {
+					sets.iter().flat_map(|(_, bindings)| {
+						bindings.iter().map(|(_, info)| match info {
+							DescriptorBinding::RWStructuredBuffer { struct_info, .. } => Some(struct_info),
+							DescriptorBinding::StructuredBuffer { struct_info, .. } => Some(struct_info),
 							_ => None,
 						})
 					})
@@ -508,10 +699,12 @@ fn main() {
 pub mod {}_inc {{
 {}
 {}
+{}
 }}",
 						module,
 						sets.iter().map(|(set, bindings)| generate_descriptor_rust(*set, bindings)).collect::<String>(),
-						uniform_decls.iter().map(|struct_info| generate_struct_rust(struct_info)).collect::<String>(),
+						cbuffer_decls.iter().map(|struct_info| generate_cbuffer_rust(struct_info)).collect::<String>(),
+						structured_buffer_decls.iter().map(|struct_info| generate_structured_buffer_rust(struct_info)).collect::<String>(),
 					)
 				})
 				.collect::<String>();

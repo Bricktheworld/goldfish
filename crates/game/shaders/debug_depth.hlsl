@@ -4,6 +4,7 @@
 struct NearPlane
 {
 	float z_near;
+	float z_scale;
 };
 
 [[vk::binding(2,0)]] ConstantBuffer<NearPlane> c_near : register(b0);
@@ -14,14 +15,11 @@ struct PSInput
 	float2 uv : TEXCOORD0;
 };
 
-#define Z_NEAR (0.01f)
-
 float4 ps_main (PSInput input) : SV_TARGET
 {
 	float depth = t_depth.Sample(s_depth, input.uv).r;
 
-	// TODO(Brandon): I have no idea what I'm doing wrong, but it's nearly impossible to see the depth buffer if I don't divide the linearization by 10...
-	float linearized = Z_NEAR / depth * 0.1f;
+	float linearized = c_near.z_near / depth * c_near.z_scale;
 	return float4(linearized, linearized, linearized, 1.0f);
 }
 
