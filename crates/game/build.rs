@@ -247,11 +247,8 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 		}
 
 		for resource in resources.storage_buffers {
-			println!("cargo:warning=Base type id {:?}", resource.base_type_id);
-			let ty_name = ast.get_name(resource.base_type_id + 1).unwrap();
-			let name = ast.get_name(resource.id).unwrap();
-
-			// let ty_name = if let Some(last) = ty_name.rfind(".") { ty_name[last + 1..].to_owned() } else { ty_name };
+			let name = resource.name.clone();
+			let ty_name = ast.get_name(resource.base_type_id).unwrap();
 
 			let resource_type = ast.get_type(resource.base_type_id).unwrap();
 
@@ -270,14 +267,28 @@ fn generate_descriptors(asts: &mut [spirv::Ast<hlsl::Target>]) -> DescriptorSets
 
 			let size = ast.get_decoration(base_type_id, Decoration::ArrayStride).unwrap();
 
+			let mut base_type_id: Option<u32> = None;
+			// TODO(Brandon): This is perhaps the hackiest thing I've ever done, but it gets the build script working :/
+			for id in 0..1000 {
+				let id_name = ast.get_name(id).unwrap();
+				let name = ast.get_member_name(id, 0).unwrap();
+				if !name.is_empty() && ty_name.ends_with(&id_name) {
+					base_type_id = Some(id);
+					break;
+				}
+			}
+
+			let base_type_id = base_type_id.expect("Could not find matching base_type_id through our hacky method :/");
+			let ty_name = ast.get_name(base_type_id).unwrap();
+
 			let members = member_types
 				.iter()
 				.enumerate()
 				.map(|(i, id)| StructMember {
 					// TODO(Brandon): This cannot POSSIBLY be correct, but for some reason it's working :/
-					name: ast.get_member_name(resource.base_type_id + 1, i as u32).unwrap(),
+					name: ast.get_member_name(base_type_id, i as u32).unwrap(),
 					ty: ast.get_type(*id).unwrap().into(),
-					offset: ast.get_member_decoration(resource.base_type_id + 1, i as u32, Decoration::Offset).unwrap(),
+					offset: ast.get_member_decoration(base_type_id, i as u32, Decoration::Offset).unwrap(),
 				})
 				.collect::<Vec<_>>();
 
@@ -342,7 +353,7 @@ fn parse_shader_includes(asset_dir: &Path) -> Result<HashMap<String, DescriptorS
 			let mut src = fs::read_to_string(&asset_path).map_err(move |err| BuildError::Filesystem(err))?;
 
 			if src.contains("#include") {
-				unimplemented!("Cannot have nested includes, as this would require a dependency tree which is not implemented...");
+				println!("cargo:warning=WARNING: Nested include detected! This is not fully tested yet...");
 			}
 
 			if !src.contains(VS_MAIN) {

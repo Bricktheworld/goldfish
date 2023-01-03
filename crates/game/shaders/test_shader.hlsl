@@ -9,7 +9,7 @@ PSInput vs_main(VSInput input)
 {
 	PSInput result;
 	
-	result.position = mul(g_camera.view_proj, mul(g_model.matrix, float4(input.position, 1.0)));
+	result.position = mul(c_camera.view_proj, mul(c_model.matrix, float4(input.position, 1.0)));
 	
 	return result;
 }

@@ -1,7 +1,9 @@
 #ifndef COMMON
 #define COMMON
+#include "utils.hlsli"
 
-#define CAMERA_BUFFER_SLOT b0
+#define CAMERA_BUFFER_SLOT b9999
+#define MODEL_BUFFER_SLOT b9998
 
 struct VSInput
 {
@@ -20,19 +22,12 @@ struct Camera
 	float4x4 view_proj;
 };
 
-[[vk::binding(0,0)]] ConstantBuffer<Camera> g_camera : register(CAMERA_BUFFER_SLOT);
+[[vk::binding(0,0)]] ConstantBuffer<Camera> c_camera : register(CAMERA_BUFFER_SLOT);
 
 struct Model
 {
 	float4x4 matrix;
 };
-[[vk::binding(1,0)]] ConstantBuffer<Model> g_model : register(b1);
-
-struct PushConstants
-{
-	float4x4 model;
-};
-
-// [[vk::push_constant]] PushConstants g_pushConstants;
+[[vk::binding(1,0)]] ConstantBuffer<Model> c_model : register(MODEL_BUFFER_SLOT);
 
 #endif

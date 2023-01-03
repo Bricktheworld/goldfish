@@ -1,12 +1,11 @@
 include!(concat!(env!("OUT_DIR"), "/materials.rs"));
 
-use glam::Vec4Swizzles;
 use goldfish::build::{CBuffer, StructuredBuffer};
 use goldfish::game::GameLib;
 use goldfish::package::{AssetType, Package};
 use goldfish::renderer;
 use goldfish::GoldfishEngine;
-use goldfish::{Mat4, Quat, UVec2, Vec3, Vec4};
+use goldfish::{Mat4, Quat, UVec2, Vec3, Vec4, Vec4Swizzles};
 use renderer::*;
 use uuid::uuid;
 use winit::event::VirtualKeyCode;
@@ -151,7 +150,6 @@ impl Game {
 				Vec3 { x: 0.0, y: 1.0, z: 0.0 },
 			);
 
-			dbg!("View matrix {}", view);
 			let camera = common_inc::Camera {
 				position: self.camera_transform.position,
 				view,
@@ -168,7 +166,6 @@ impl Game {
 					view,
 					z_near: Z_NEAR,
 					inverse_proj,
-					proj,
 					light_count: 1,
 				}
 				.as_buffer(),
@@ -176,11 +173,7 @@ impl Game {
 
 			let deltas = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
 			for (i, point_light) in self.point_lights.iter_mut().enumerate() {
-				let view_pos = view * Vec4::new(2.0, 0.0, 0.0, 1.0);
 				point_light.position = Vec3::new(2.0, 0.0, 0.0);
-				let point_on_light_radius = Vec4::new(2.0, 2.0, 0.0, 1.0);
-				let view_point_on_light_radius = view * point_on_light_radius;
-				let view_radius = view_point_on_light_radius.xyz().distance(point_light.position);
 				point_light.radius = 2.0;
 			}
 

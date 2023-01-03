@@ -1,13 +1,7 @@
+#include "utils.hlsli"
 #ifndef TILE_SIZE
 #define TILE_SIZE 16
 #endif
-
-struct PointLight
-{
-	float4 color;
-	float3 position;
-	float radius;
-};
 
 struct VisibleLightIndex
 {
@@ -18,7 +12,6 @@ struct CullInfo
 {
 	float4x4 inverse_proj;
 	float4x4 view;
-	float4x4 proj;
 	uint2 screen_size;
 	float z_near;
 	uint light_count;
@@ -206,6 +199,6 @@ void cs_main(uint3 global_invocation_id : SV_DispatchThreadID, uint3 local_invoc
 	GroupMemoryBarrierWithGroupSync();
 
 
-	rw_t_heatmap[location] = float4(0.0f, 0.0f, float(gs_visible_light_count) / float(c_cull_info.light_count), 1.0f);
+	rw_t_heatmap[location] = float4(0.0f, 1.0f - z_furthest * 0.01f, float(gs_visible_light_count) / float(c_cull_info.light_count), 1.0f);
 
 }

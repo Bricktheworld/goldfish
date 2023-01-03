@@ -350,6 +350,10 @@ impl RenderGraphCache {
 	}
 
 	pub fn destroy(self, graphics_device: &mut GraphicsDevice) {
+		for buffer in self.buffer_cache.buffers {
+			graphics_device.destroy_buffer(buffer);
+		}
+
 		for attachment in self.attachment_cache.attachments {
 			graphics_device.destroy_texture(attachment);
 		}
@@ -874,6 +878,7 @@ impl GraphPhysicalResourceMap {
 					.iter()
 					.filter(|(_, ty)| match ty {
 						GraphOwnedResourceDescriptorBinding::ImportedBuffer(..) => true,
+						GraphOwnedResourceDescriptorBinding::Buffer(..) => true,
 						_ => false,
 					})
 					.map(|(binding, buffer)| {
