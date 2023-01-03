@@ -97,6 +97,11 @@ pub enum VulkanRasterCmd {
 		buffer_memory_barriers: Vec<vk::BufferMemoryBarrier>,
 		image_memory_barriers: Vec<vk::ImageMemoryBarrier>,
 	},
+	Dispatch {
+		group_count_x: u32,
+		group_count_y: u32,
+		group_count_z: u32,
+	},
 	None,
 }
 
@@ -258,6 +263,11 @@ impl VulkanGraphicsContext {
 					first_vertex,
 					first_instance,
 				} => raw.cmd_draw(cmd_buf, vertex_count, instance_count, first_vertex, first_instance),
+				VulkanRasterCmd::Dispatch {
+					group_count_x,
+					group_count_y,
+					group_count_z,
+				} => raw.cmd_dispatch(cmd_buf, group_count_x, group_count_y, group_count_z),
 				VulkanRasterCmd::None => panic!("None raster command queued!"),
 			}
 		});
@@ -392,12 +402,24 @@ impl VulkanGraphicsContext {
 		});
 	}
 
-	pub fn bind_descriptor(&self, descriptor_heap: &VulkanDescriptorHeap, descriptor_set: &VulkanDescriptorHandle, set: u32, pipeline: &VulkanPipeline) {
+	pub fn bind_graphics_descriptor(&self, descriptor_heap: &VulkanDescriptorHeap, descriptor_set: &VulkanDescriptorHandle, set: u32, pipeline: &VulkanPipeline) {
 		let frame = self.current_frame_info.as_ref().expect("begin_frame was not called!").frame_index;
 
 		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
 		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor {
 			pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
+			pipeline_layout: pipeline.pipeline_layout,
+			first_set: set,
+			descriptor_set: descriptor,
+		});
+	}
+
+	pub fn bind_compute_descriptor(&self, descriptor_heap: &VulkanDescriptorHeap, descriptor_set: &VulkanDescriptorHandle, set: u32, pipeline: &VulkanPipeline) {
+		let frame = self.current_frame_info.as_ref().expect("begin_frame was not called!").frame_index;
+
+		let descriptor = descriptor_heap.descriptors[descriptor_set.id as usize][frame];
+		self.queue_raster_cmd(VulkanRasterCmd::BindDescriptor {
+			pipeline_bind_point: vk::PipelineBindPoint::COMPUTE,
 			pipeline_layout: pipeline.pipeline_layout,
 			first_set: set,
 			descriptor_set: descriptor,
@@ -476,6 +498,14 @@ impl VulkanGraphicsContext {
 			image_memory_barriers: image_memory_barriers.to_vec(),
 		})
 	}
+
+	pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) {
+		self.queue_raster_cmd(VulkanRasterCmd::Dispatch {
+			group_count_x,
+			group_count_y,
+			group_count_z,
+		})
+	}
 }
 
 use crate::renderer::TextureFormat;
@@ -483,13 +513,52 @@ use crate::renderer::TextureFormat;
 impl TextureFormat {
 	fn to_vk(&self, device: &VulkanDevice) -> vk::Format {
 		match self {
-			TextureFormat::RGB8 | TextureFormat::CubemapRGB8 => vk::Format::R8G8B8_UNORM,
-			TextureFormat::RGB16 | TextureFormat::CubemapRGB16 => vk::Format::R16G16B16_UNORM,
-			TextureFormat::RGBA8 | TextureFormat::CubemapRGBA8 => vk::Format::R8G8B8A8_UNORM,
-
-			TextureFormat::RGBA16 | TextureFormat::CubemapRGBA16 => vk::Format::R16G16B16A16_UNORM,
+			TextureFormat::R8UNorm => vk::Format::R8_UNORM,
+			TextureFormat::R16UNorm => vk::Format::R16_UNORM,
+			TextureFormat::RG8UNorm => vk::Format::R8G8_UNORM,
+			TextureFormat::RG16UNorm => vk::Format::R16G16_UNORM,
+			TextureFormat::RGB8UNorm | TextureFormat::CubemapRGB8UNorm => vk::Format::R8G8B8_UNORM,
+			TextureFormat::RGB16UNorm | TextureFormat::CubemapRGB16UNorm => vk::Format::R16G16B16_UNORM,
+			TextureFormat::RGBA8UNorm | TextureFormat::CubemapRGBA8UNorm => vk::Format::R8G8B8A8_UNORM,
+			TextureFormat::RGBA16UNorm | TextureFormat::CubemapRGBA16UNorm => vk::Format::R16G16B16A16_UNORM,
 			TextureFormat::SRGB8 | TextureFormat::CubemapSRGB8 => vk::Format::R8G8B8_SRGB,
 			TextureFormat::SRGBA8 | TextureFormat::CubemapSRGBA8 => vk::Format::R8G8B8A8_SRGB,
+			TextureFormat::R8SNorm => vk::Format::R8_SNORM,
+			TextureFormat::R16SNorm => vk::Format::R16_SNORM,
+			TextureFormat::RG8SNorm => vk::Format::R8G8_SNORM,
+			TextureFormat::RG16SNorm => vk::Format::R16G16_SNORM,
+			TextureFormat::RGB8SNorm => vk::Format::R8G8B8_SNORM,
+			TextureFormat::RGB16SNorm => vk::Format::R16G16B16_SNORM,
+			TextureFormat::RGBA8SNorm => vk::Format::R8G8B8A8_SNORM,
+			TextureFormat::RGBA16SNorm => vk::Format::R16G16B16A16_SNORM,
+			TextureFormat::R8UInt => vk::Format::R8_UINT,
+			TextureFormat::R16UInt => vk::Format::R16_UINT,
+			TextureFormat::R32UInt => vk::Format::R32_UINT,
+			TextureFormat::RG8UInt => vk::Format::R8G8_UINT,
+			TextureFormat::RG16UInt => vk::Format::R16G16_UINT,
+			TextureFormat::RG32UInt => vk::Format::R32G32_UINT,
+			TextureFormat::RGB8UInt => vk::Format::R8G8B8_UINT,
+			TextureFormat::RGB16UInt => vk::Format::R16G16B16_UINT,
+			TextureFormat::RGB32UInt => vk::Format::R32G32B32_UINT,
+			TextureFormat::RGBA8UInt => vk::Format::R8G8B8A8_UINT,
+			TextureFormat::RGBA16UInt => vk::Format::R16G16B16A16_UINT,
+			TextureFormat::RGBA32UInt => vk::Format::R32G32B32A32_UINT,
+			TextureFormat::R8SInt => vk::Format::R8_SINT,
+			TextureFormat::R16SInt => vk::Format::R16_SINT,
+			TextureFormat::R32SInt => vk::Format::R32_SINT,
+			TextureFormat::RG8SInt => vk::Format::R8G8_SINT,
+			TextureFormat::RG16SInt => vk::Format::R16G16_SINT,
+			TextureFormat::RG32SInt => vk::Format::R32G32_SINT,
+			TextureFormat::RGB8SInt => vk::Format::R8G8B8_SINT,
+			TextureFormat::RGB16SInt => vk::Format::R16G16B16_SINT,
+			TextureFormat::RGB32SInt => vk::Format::R32G32B32_SINT,
+			TextureFormat::RGBA8SInt => vk::Format::R8G8B8A8_SINT,
+			TextureFormat::RGBA16SInt => vk::Format::R16G16B16A16_SINT,
+			TextureFormat::RGBA32SInt => vk::Format::R32G32B32A32_SINT,
+			TextureFormat::R32Float => vk::Format::R32_SFLOAT,
+			TextureFormat::RG32Float => vk::Format::R32G32_SFLOAT,
+			TextureFormat::RGB32Float => vk::Format::R32G32B32_SFLOAT,
+			TextureFormat::RGBA32Float => vk::Format::R32G32B32A32_SFLOAT,
 			TextureFormat::Depth => device.depth_format,
 		}
 	}

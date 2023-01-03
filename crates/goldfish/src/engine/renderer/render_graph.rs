@@ -14,10 +14,15 @@ enum PassCmd {
 	BindComputePipeline {
 		pipeline: GraphComputePipelineHandle,
 	},
-	BindDescriptor {
+	BindGraphicsDescriptor {
 		set: u32,
-		descriptor: GraphDescriptorHandle,
-		pipeline: GraphPipelineHandle,
+		descriptor: GraphGraphicsDescriptorHandle,
+		pipeline: GraphRasterPipelineHandle,
+	},
+	BindComputeDescriptor {
+		set: u32,
+		descriptor: GraphComputeDescriptorHandle,
+		pipeline: GraphComputePipelineHandle,
 	},
 	DrawMesh {
 		mesh: GraphImportedMeshHandle,
@@ -27,6 +32,11 @@ enum PassCmd {
 		instance_count: u32,
 		first_vertex: u32,
 		first_instance: u32,
+	},
+	Dispatch {
+		group_count_x: u32,
+		group_count_y: u32,
+		group_count_z: u32,
 	},
 }
 
@@ -152,7 +162,8 @@ pub struct RenderGraphCache {
 	raster_pipeline_cache: RasterPipelineCache,
 	compute_pipeline_cache: ComputePipelineCache,
 	descriptor_layout_cache: DescriptorLayoutCache,
-	descriptor_heap_caches: HashMap<*const DescriptorSetInfo, DescriptorHeapCache>,
+	graphics_descriptor_heap_caches: HashMap<*const DescriptorSetInfo, DescriptorHeapCache>,
+	compute_descriptor_heap_caches: HashMap<*const DescriptorSetInfo, DescriptorHeapCache>,
 }
 
 impl RenderGraphCache {
@@ -286,10 +297,10 @@ impl RenderGraphCache {
 		}
 	}
 
-	fn alloc_descriptor(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo, key: &DescriptorHeapCacheKey) -> DescriptorHandle {
+	fn alloc_graphics_descriptor(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo, key: &DescriptorHeapCacheKey) -> DescriptorHandle {
 		self.register_graphics_descriptor_layout(graphics_device, descriptor_info);
 
-		let descriptor_cache = self.descriptor_heap_caches.get_mut(&(descriptor_info as *const DescriptorSetInfo)).unwrap();
+		let descriptor_cache = self.graphics_descriptor_heap_caches.get_mut(&(descriptor_info as *const DescriptorSetInfo)).unwrap();
 
 		*descriptor_cache.cache.entry(key.clone()).or_insert_with(|| {
 			println!("Allocated descriptor!");
@@ -297,14 +308,29 @@ impl RenderGraphCache {
 		})
 	}
 
-	fn get_descriptor_heap(&self, descriptor_info: &'static DescriptorSetInfo) -> &DescriptorHeap {
-		&self.descriptor_heap_caches.get(&(descriptor_info as *const DescriptorSetInfo)).unwrap().heap
+	fn alloc_compute_descriptor(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo, key: &DescriptorHeapCacheKey) -> DescriptorHandle {
+		self.register_compute_descriptor_layout(graphics_device, descriptor_info);
+
+		let descriptor_cache = self.compute_descriptor_heap_caches.get_mut(&(descriptor_info as *const DescriptorSetInfo)).unwrap();
+
+		*descriptor_cache.cache.entry(key.clone()).or_insert_with(|| {
+			println!("Allocated descriptor!");
+			descriptor_cache.heap.alloc().unwrap()
+		})
+	}
+
+	fn get_graphics_descriptor_heap(&self, descriptor_info: &'static DescriptorSetInfo) -> &DescriptorHeap {
+		&self.graphics_descriptor_heap_caches.get(&(descriptor_info as *const DescriptorSetInfo)).unwrap().heap
+	}
+
+	fn get_compute_descriptor_heap(&self, descriptor_info: &'static DescriptorSetInfo) -> &DescriptorHeap {
+		&self.compute_descriptor_heap_caches.get(&(descriptor_info as *const DescriptorSetInfo)).unwrap().heap
 	}
 
 	fn register_graphics_descriptor_layout(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo) -> DescriptorLayout {
 		let layout = graphics_device.get_graphics_layout(&mut self.descriptor_layout_cache, descriptor_info);
 
-		self.descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
+		self.graphics_descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
 			heap: graphics_device.create_descriptor_heap(layout),
 			cache: Default::default(),
 		});
@@ -315,7 +341,7 @@ impl RenderGraphCache {
 	fn register_compute_descriptor_layout(&mut self, graphics_device: &GraphicsDevice, descriptor_info: &'static DescriptorSetInfo) -> DescriptorLayout {
 		let layout = graphics_device.get_compute_layout(&mut self.descriptor_layout_cache, descriptor_info);
 
-		self.descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
+		self.compute_descriptor_heap_caches.entry(descriptor_info).or_insert_with(|| DescriptorHeapCache {
 			heap: graphics_device.create_descriptor_heap(layout),
 			cache: Default::default(),
 		});
@@ -340,7 +366,11 @@ impl RenderGraphCache {
 			graphics_device.destroy_framebuffer(framebuffer);
 		}
 
-		for (_, cache) in self.descriptor_heap_caches {
+		for (_, cache) in self.graphics_descriptor_heap_caches {
+			graphics_device.destroy_descriptor_heap(cache.heap);
+		}
+
+		for (_, cache) in self.compute_descriptor_heap_caches {
 			graphics_device.destroy_descriptor_heap(cache.heap);
 		}
 
@@ -386,6 +416,13 @@ pub struct RasterPipelineDesc<'a, 'b> {
 	pub push_constant_bytes: usize,
 	pub vertex_input_info: VertexInputInfo,
 	pub polygon_mode: PolygonMode,
+}
+
+#[derive(Clone)]
+pub struct ComputePipelineDesc<'a, 'b> {
+	pub name: &'static str,
+	pub cs: &'a Shader,
+	pub descriptor_layouts: &'b [&'static DescriptorSetInfo],
 }
 
 pub enum DescriptorBindingDesc<'a, 'b> {
@@ -482,7 +519,12 @@ enum GraphOwnedResource {
 		usage: BufferUsage,
 		location: MemoryLocation,
 	},
-	DescriptorSet {
+	GraphicsDescriptorSet {
+		name: &'static str,
+		descriptor_layout: &'static DescriptorSetInfo,
+		bindings: Vec<(u32, GraphOwnedResourceDescriptorBinding)>,
+	},
+	ComputeDescriptorSet {
 		name: &'static str,
 		descriptor_layout: &'static DescriptorSetInfo,
 		bindings: Vec<(u32, GraphOwnedResourceDescriptorBinding)>,
@@ -497,12 +539,6 @@ pub struct GraphRasterPipelineHandle {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GraphComputePipelineHandle {
 	id: usize,
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-enum GraphPipelineHandle {
-	Raster(GraphRasterPipelineHandle),
-	Compute(GraphComputePipelineHandle),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -573,7 +609,12 @@ pub struct GraphRenderPassHandle {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct GraphDescriptorHandle {
+pub struct GraphGraphicsDescriptorHandle {
+	id: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GraphComputeDescriptorHandle {
 	id: usize,
 }
 
@@ -680,12 +721,23 @@ impl GraphPhysicalResourceMap {
 		&graph.cache.compute_pipeline_cache.pipelines[physical_pipeline]
 	}
 
-	fn get_descriptor<'a>(&self, graph: &'a RenderGraph, descriptor: GraphDescriptorHandle) -> (DescriptorHandle, &'a DescriptorHeap) {
+	fn get_graphics_descriptor<'a>(&self, graph: &'a RenderGraph, descriptor: GraphGraphicsDescriptorHandle) -> (DescriptorHandle, &'a DescriptorHeap) {
 		let (descriptor, info) = self.descriptor_map.get_physical(descriptor.id);
-		(descriptor, graph.cache.get_descriptor_heap(info))
+		(descriptor, graph.cache.get_graphics_descriptor_heap(info))
+	}
+
+	fn get_compute_descriptor<'a>(&self, graph: &'a RenderGraph, descriptor: GraphComputeDescriptorHandle) -> (DescriptorHandle, &'a DescriptorHeap) {
+		let (descriptor, info) = self.descriptor_map.get_physical(descriptor.id);
+		(descriptor, graph.cache.get_compute_descriptor_heap(info))
 	}
 
 	fn get_attachment<'a>(&self, graph: &'a RenderGraph, attachment: GraphAttachmentHandle) -> &'a Texture {
+		let physical_attachment = self.attachment_map.get_physical(attachment.id);
+
+		&graph.cache.attachment_cache.attachments[physical_attachment]
+	}
+
+	fn get_mutable_attachment<'a>(&self, graph: &'a RenderGraph, attachment: MutableGraphAttachmentHandle) -> &'a Texture {
 		let physical_attachment = self.attachment_map.get_physical(attachment.id);
 
 		&graph.cache.attachment_cache.attachments[physical_attachment]
@@ -768,90 +820,121 @@ impl GraphPhysicalResourceMap {
 	) -> VirtualToPhysicalResourceMap<(DescriptorHandle, &'static DescriptorSetInfo)> {
 		let mut descriptor_map = VirtualToPhysicalResourceMap::new();
 		for (id, resource) in graph.owned_resources.iter().enumerate() {
-			match resource {
-				GraphOwnedResource::DescriptorSet { descriptor_layout, bindings, .. } => {
-					let key_bindings = bindings
-						.iter()
-						.map(|(i, binding)| {
-							(
-								*i,
-								match binding {
-									GraphOwnedResourceDescriptorBinding::ImportedBuffer(buffer) => match &graph.imported_resources[buffer.id] {
-										GraphImportedResource::Buffer(buffer) => DescriptorHeapCacheKeyBinding::ImportedBuffer { buffer: buffer.raw },
-										_ => unreachable!("Invalid buffer handle!"),
-									},
-									GraphOwnedResourceDescriptorBinding::ImportedTexture(texture) => match &graph.imported_resources[texture.id] {
-										GraphImportedResource::Texture(texture) => DescriptorHeapCacheKeyBinding::ImportedTexture {
-											image: texture.image,
-											sampler: texture.sampler,
-											image_view: texture.image_view,
-										},
-										_ => unreachable!("Invalid texture handle!"),
-									},
-									GraphOwnedResourceDescriptorBinding::Buffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
-										buffer: buffer_map.get_physical(buffer.id),
-									},
-									GraphOwnedResourceDescriptorBinding::MutableBuffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
-										buffer: buffer_map.get_physical(buffer.id),
-									},
-									GraphOwnedResourceDescriptorBinding::Attachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
-										attachment: attachment_map.get_physical(attachment.id),
-									},
-									GraphOwnedResourceDescriptorBinding::MutableAttachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
-										attachment: attachment_map.get_physical(attachment.id),
-									},
+			let get_key_bindings = |bindings: &Vec<(u32, GraphOwnedResourceDescriptorBinding)>| {
+				bindings
+					.iter()
+					.map(|(i, binding)| {
+						(
+							*i,
+							match binding {
+								GraphOwnedResourceDescriptorBinding::ImportedBuffer(buffer) => match &graph.imported_resources[buffer.id] {
+									GraphImportedResource::Buffer(buffer) => DescriptorHeapCacheKeyBinding::ImportedBuffer { buffer: buffer.raw },
+									_ => unreachable!("Invalid buffer handle!"),
 								},
-							)
-						})
-						.collect::<Vec<_>>();
+								GraphOwnedResourceDescriptorBinding::ImportedTexture(texture) => match &graph.imported_resources[texture.id] {
+									GraphImportedResource::Texture(texture) => DescriptorHeapCacheKeyBinding::ImportedTexture {
+										image: texture.image,
+										sampler: texture.sampler,
+										image_view: texture.image_view,
+									},
+									_ => unreachable!("Invalid texture handle!"),
+								},
+								GraphOwnedResourceDescriptorBinding::Buffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
+									buffer: buffer_map.get_physical(buffer.id),
+								},
+								GraphOwnedResourceDescriptorBinding::MutableBuffer(buffer) => DescriptorHeapCacheKeyBinding::Buffer {
+									buffer: buffer_map.get_physical(buffer.id),
+								},
+								GraphOwnedResourceDescriptorBinding::Attachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
+									attachment: attachment_map.get_physical(attachment.id),
+								},
+								GraphOwnedResourceDescriptorBinding::MutableAttachment(attachment) => DescriptorHeapCacheKeyBinding::Attachment {
+									attachment: attachment_map.get_physical(attachment.id),
+								},
+							},
+						)
+					})
+					.collect::<Vec<_>>()
+			};
+
+			fn update_descriptor(
+				graph: &RenderGraph,
+				graphics_context: &mut GraphicsContext,
+				attachment_map: &VirtualToPhysicalResourceMap<usize>,
+				buffer_map: &VirtualToPhysicalResourceMap<usize>,
+				bindings: &Vec<(u32, GraphOwnedResourceDescriptorBinding)>,
+				descriptor_heap: &DescriptorHeap,
+				descriptor: &DescriptorHandle,
+				descriptor_layout: &'static DescriptorSetInfo,
+			) {
+				// Update the descriptor set with the appropriate data.
+				// TODO(Brandon): We should first check to make sure that we actually need to do this before we do so to prevent unnecessary vkUpdateDescriptorSet calls.
+
+				let buffers = bindings
+					.iter()
+					.filter(|(_, ty)| match ty {
+						GraphOwnedResourceDescriptorBinding::ImportedBuffer(..) => true,
+						_ => false,
+					})
+					.map(|(binding, buffer)| {
+						(
+							*binding,
+							match buffer {
+								GraphOwnedResourceDescriptorBinding::ImportedBuffer(buffer) => match graph.imported_resources[buffer.id] {
+									GraphImportedResource::Buffer(buffer) => buffer,
+									_ => unreachable!("Invalid imported buffer!"),
+								},
+								GraphOwnedResourceDescriptorBinding::Buffer(buffer) => &graph.cache.buffer_cache.buffers[buffer_map.get_physical(buffer.id)],
+								_ => unreachable!(),
+							},
+						)
+					})
+					.collect::<Vec<_>>();
+
+				let images = bindings
+					.iter()
+					.filter(|(_, ty)| match ty {
+						GraphOwnedResourceDescriptorBinding::Attachment(..) => true,
+						GraphOwnedResourceDescriptorBinding::MutableAttachment(..) => true,
+						_ => false,
+					})
+					.map(|(binding, image)| match image {
+						GraphOwnedResourceDescriptorBinding::Attachment(attachment) => {
+							let physical_attachment = &graph.cache.attachment_cache.attachments[attachment_map.get_physical(attachment.id)];
+
+							(*binding, physical_attachment, attachment.final_layout)
+						}
+						GraphOwnedResourceDescriptorBinding::MutableAttachment(attachment) => {
+							let physical_attachment = &graph.cache.attachment_cache.attachments[attachment_map.get_physical(attachment.id)];
+
+							(*binding, physical_attachment, attachment.layout)
+						}
+						_ => unreachable!(),
+					})
+					.collect::<Vec<_>>();
+
+				graphics_context.update_descriptor(&buffers, &images, descriptor_layout, descriptor_heap, &descriptor);
+			}
+			match resource {
+				GraphOwnedResource::GraphicsDescriptorSet { descriptor_layout, bindings, .. } => {
+					let key_bindings = get_key_bindings(bindings);
 					let key = DescriptorHeapCacheKey { bindings: key_bindings };
 
-					let descriptor = graph.cache.alloc_descriptor(graphics_device, descriptor_layout, &key);
+					let descriptor = graph.cache.alloc_graphics_descriptor(graphics_device, descriptor_layout, &key);
+					let descriptor_heap = &graph.cache.get_graphics_descriptor_heap(descriptor_layout);
+					update_descriptor(graph, graphics_context, attachment_map, buffer_map, bindings, descriptor_heap, &descriptor, descriptor_layout);
 
 					descriptor_map.map_physical(id, (descriptor, *descriptor_layout));
+				}
+				GraphOwnedResource::ComputeDescriptorSet { descriptor_layout, bindings, .. } => {
+					let key_bindings = get_key_bindings(bindings);
+					let key = DescriptorHeapCacheKey { bindings: key_bindings };
 
-					// Update the descriptor set with the appropriate data.
-					// TODO(Brandon): We should first check to make sure that we actually need to do this before we do so to prevent unnecessary vkUpdateDescriptorSet calls.
-					let descriptor_heap = &graph.cache.get_descriptor_heap(descriptor_layout);
+					let descriptor = graph.cache.alloc_compute_descriptor(graphics_device, descriptor_layout, &key);
+					let descriptor_heap = &graph.cache.get_compute_descriptor_heap(descriptor_layout);
+					update_descriptor(graph, graphics_context, attachment_map, buffer_map, bindings, descriptor_heap, &descriptor, descriptor_layout);
 
-					let buffers = bindings
-						.iter()
-						.filter(|(_, ty)| match ty {
-							GraphOwnedResourceDescriptorBinding::ImportedBuffer(..) => true,
-							_ => false,
-						})
-						.map(|(binding, buffer)| {
-							(
-								*binding,
-								match buffer {
-									GraphOwnedResourceDescriptorBinding::ImportedBuffer(buffer) => match graph.imported_resources[buffer.id] {
-										GraphImportedResource::Buffer(buffer) => buffer,
-										_ => unreachable!("Invalid imported buffer!"),
-									},
-									GraphOwnedResourceDescriptorBinding::Buffer(buffer) => &graph.cache.buffer_cache.buffers[buffer_map.get_physical(buffer.id)],
-									_ => unreachable!(),
-								},
-							)
-						})
-						.collect::<Vec<_>>();
-
-					let images = bindings
-						.iter()
-						.filter(|(_, ty)| match ty {
-							GraphOwnedResourceDescriptorBinding::Attachment(..) => true,
-							_ => false,
-						})
-						.map(|(binding, image)| match image {
-							GraphOwnedResourceDescriptorBinding::Attachment(attachment) => {
-								let physical_attachment = &graph.cache.attachment_cache.attachments[attachment_map.get_physical(attachment.id)];
-
-								(*binding, physical_attachment, attachment.final_layout)
-							}
-							_ => unreachable!(),
-						})
-						.collect::<Vec<_>>();
-
-					graphics_context.update_descriptor(&buffers, &images, descriptor_layout, descriptor_heap, &descriptor);
+					descriptor_map.map_physical(id, (descriptor, *descriptor_layout));
 				}
 				_ => {}
 			}
@@ -1129,52 +1212,76 @@ impl<'a> RenderGraph<'a> {
 
 		let resource_map = GraphPhysicalResourceMap::new(&mut self, graphics_device, graphics_context);
 		for pass in passes {
+			for &attachment in self.passes[pass.id].read_attachments.iter() {
+				let physical_attachment = resource_map.get_attachment(&self, attachment);
+				// dbg!("Adding read pipeline barrier for pass {}, {:?}", self.passes[pass.id].name, attachment);
+
+				graphics_context.pipeline_barrier(
+					attachment.src_stage,
+					attachment.dst_stage,
+					ash::vk::DependencyFlags::empty(),
+					&[],
+					&[],
+					&[ash::vk::ImageMemoryBarrier::builder()
+						.old_layout(attachment.initial_layout.into())
+						.new_layout(attachment.final_layout.into())
+						.image(physical_attachment.image)
+						.subresource_range(physical_attachment.subresource_range)
+						.src_access_mask(attachment.src_access)
+						.dst_access_mask(attachment.dst_access)
+						.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.build()],
+				);
+			}
+
+			for &attachment in self.passes[pass.id].write_attachments.iter() {
+				let physical_attachment = resource_map.get_mutable_attachment(&self, attachment);
+				// dbg!("Adding write pipeline barrier for pass {}, {:?}", self.passes[pass.id].name, attachment);
+
+				graphics_context.pipeline_barrier(
+					ash::vk::PipelineStageFlags::TOP_OF_PIPE,
+					attachment.stage,
+					ash::vk::DependencyFlags::empty(),
+					&[],
+					&[],
+					&[ash::vk::ImageMemoryBarrier::builder()
+						.old_layout(ImageLayout::Undefined.into())
+						.new_layout(attachment.layout.into())
+						.image(physical_attachment.image)
+						.subresource_range(physical_attachment.subresource_range)
+						.src_access_mask(ash::vk::AccessFlags::empty())
+						.dst_access_mask(attachment.access)
+						.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.build()],
+				);
+			}
+
+			for &buffer in self.passes[pass.id].read_buffers.iter() {
+				let physical_buffer = resource_map.get_buffer(&self, buffer);
+
+				graphics_context.pipeline_barrier(
+					buffer.src_stage,
+					buffer.dst_stage,
+					ash::vk::DependencyFlags::empty(),
+					&[],
+					&[ash::vk::BufferMemoryBarrier::builder()
+						.buffer(physical_buffer.raw)
+						.size(physical_buffer.size as u64)
+						.offset(0)
+						.src_access_mask(buffer.src_access)
+						.dst_access_mask(buffer.dst_access)
+						.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+						.build()],
+					&[],
+				)
+			}
+
 			for cmd in self.passes[pass.id].cmds.iter() {
 				match cmd {
 					PassCmd::BeginRenderPass { render_pass, clear_values } => {
-						for &attachment in self.passes[pass.id].read_attachments.iter() {
-							let physical_attachment = resource_map.get_attachment(&self, attachment);
-
-							graphics_context.pipeline_barrier(
-								attachment.src_stage,
-								attachment.dst_stage,
-								ash::vk::DependencyFlags::empty(),
-								&[],
-								&[],
-								&[ash::vk::ImageMemoryBarrier::builder()
-									.old_layout(attachment.initial_layout.into())
-									.new_layout(attachment.final_layout.into())
-									.image(physical_attachment.image)
-									.subresource_range(physical_attachment.subresource_range)
-									.src_access_mask(attachment.src_access)
-									.dst_access_mask(attachment.dst_access)
-									.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
-									.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
-									.build()],
-							);
-						}
-
-						for &buffer in self.passes[pass.id].read_buffers.iter() {
-							let physical_buffer = resource_map.get_buffer(&self, buffer);
-
-							graphics_context.pipeline_barrier(
-								buffer.src_stage,
-								buffer.dst_stage,
-								ash::vk::DependencyFlags::empty(),
-								&[],
-								&[ash::vk::BufferMemoryBarrier::builder()
-									.buffer(physical_buffer.raw)
-									.size(physical_buffer.size as u64)
-									.offset(0)
-									.src_access_mask(buffer.src_access)
-									.dst_access_mask(buffer.dst_access)
-									.src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
-									.dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
-									.build()],
-								&[],
-							)
-						}
-
 						if let Some((render_pass, framebuffer)) = resource_map.get_render_pass(&self, *render_pass) {
 							graphics_context.begin_render_pass(render_pass, framebuffer, &clear_values);
 						} else {
@@ -1190,15 +1297,19 @@ impl<'a> RenderGraph<'a> {
 						let pipeline = resource_map.get_compute_pipeline(&self, pipeline);
 						graphics_context.bind_compute_pipeline(pipeline);
 					}
-					&PassCmd::BindDescriptor { set, descriptor, pipeline } => {
-						let pipeline = match pipeline {
-							GraphPipelineHandle::Raster(pipeline) => resource_map.get_raster_pipeline(&self, pipeline),
-							GraphPipelineHandle::Compute(pipeline) => resource_map.get_compute_pipeline(&self, pipeline),
-						};
+					&PassCmd::BindGraphicsDescriptor { set, descriptor, pipeline } => {
+						let pipeline = resource_map.get_raster_pipeline(&self, pipeline);
 
-						let (descriptor, descriptor_heap) = resource_map.get_descriptor(&self, descriptor);
+						let (descriptor, descriptor_heap) = resource_map.get_graphics_descriptor(&self, descriptor);
 
-						graphics_context.bind_descriptor(descriptor_heap, &descriptor, set, pipeline);
+						graphics_context.bind_graphics_descriptor(descriptor_heap, &descriptor, set, pipeline);
+					}
+					&PassCmd::BindComputeDescriptor { set, descriptor, pipeline } => {
+						let pipeline = resource_map.get_compute_pipeline(&self, pipeline);
+
+						let (descriptor, descriptor_heap) = resource_map.get_compute_descriptor(&self, descriptor);
+
+						graphics_context.bind_compute_descriptor(descriptor_heap, &descriptor, set, pipeline);
 					}
 					PassCmd::DrawMesh { mesh } => match &self.imported_resources[mesh.id] {
 						GraphImportedResource::Mesh(mesh) => graphics_context.draw_mesh(mesh),
@@ -1210,6 +1321,11 @@ impl<'a> RenderGraph<'a> {
 						first_vertex,
 						first_instance,
 					} => graphics_context.draw(vertex_count, instance_count, first_vertex, first_instance),
+					&PassCmd::Dispatch {
+						group_count_x,
+						group_count_y,
+						group_count_z,
+					} => graphics_context.dispatch(group_count_x, group_count_y, group_count_z),
 				}
 			}
 		}
@@ -1305,6 +1421,20 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		recorded.write_buffers.insert(buffer);
 	}
 
+	pub fn add_compute_pipeline<'c>(&mut self, desc: ComputePipelineDesc<'a, 'c>) -> GraphComputePipelineHandle {
+		let name = desc.name;
+
+		let cs = GraphImportedShaderHandle {
+			id: self.graph.import_resource(GraphImportedResource::Shader(desc.cs)),
+		};
+
+		let descriptor_layouts = desc.descriptor_layouts.to_vec();
+
+		let id = self.graph.create_resource(self.pass, GraphOwnedResource::ComputePipeline { name, cs, descriptor_layouts });
+
+		GraphComputePipelineHandle { id }
+	}
+
 	pub fn add_raster_pipeline<'c>(&mut self, desc: RasterPipelineDesc<'a, 'c>) -> GraphRasterPipelineHandle {
 		let name = desc.name;
 
@@ -1350,8 +1480,6 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 	}
 
 	pub fn add_render_pass(&mut self, desc: RenderPassDesc) -> GraphRenderPassHandle {
-		let recorded = self.recorded.as_mut().unwrap();
-
 		let name = desc.name;
 		let color_attachments = desc
 			.color_attachments
@@ -1360,7 +1488,6 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 				a.layout = ImageLayout::ColorAttachmentOptimal;
 				a.access = ash::vk::AccessFlags::COLOR_ATTACHMENT_WRITE;
 				a.stage = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
-				recorded.write_attachments.insert(**a);
 				**a
 			})
 			.collect::<Vec<_>>();
@@ -1369,7 +1496,6 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 			a.layout = ImageLayout::DepthStencilAttachmentOptimal;
 			a.access = ash::vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
 			a.stage = ash::vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
-			recorded.write_attachments.insert(*a);
 			Some(*a)
 		});
 
@@ -1391,10 +1517,8 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		GraphRenderPassHandle { id }
 	}
 
-	pub fn add_descriptor_set<'c>(&mut self, desc: DescriptorDesc<'a, 'c>) -> GraphDescriptorHandle {
-		let name = desc.name;
-		let bindings = desc
-			.bindings
+	fn add_descriptor_set<'c>(&mut self, desc: DescriptorDesc<'a, 'c>) -> Vec<(u32, GraphOwnedResourceDescriptorBinding)> {
+		desc.bindings
 			.into_iter()
 			.map(|(i, binding)| {
 				(
@@ -1423,7 +1547,6 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 							GraphOwnedResourceDescriptorBinding::Attachment(*attachment)
 						}
 						DescriptorBindingDesc::MutableAttachment(attachment) => {
-							unimplemented!();
 							attachment.layout = ImageLayout::General;
 							attachment.stage = ash::vk::PipelineStageFlags::VERTEX_SHADER | ash::vk::PipelineStageFlags::FRAGMENT_SHADER | ash::vk::PipelineStageFlags::COMPUTE_SHADER;
 							attachment.access = ash::vk::AccessFlags::SHADER_READ | ash::vk::AccessFlags::SHADER_WRITE;
@@ -1433,15 +1556,29 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 					},
 				)
 			})
-			.collect::<Vec<_>>();
+			.collect::<Vec<_>>()
+	}
 
-		// TODO(Brandon): Validate bindings with descriptor set info.
-
+	pub fn add_graphics_descriptor_set<'c>(&mut self, desc: DescriptorDesc<'a, 'c>) -> GraphGraphicsDescriptorHandle {
+		let name = desc.name;
 		let descriptor_layout = desc.descriptor_layout;
 
-		let id = self.graph.create_resource(self.pass, GraphOwnedResource::DescriptorSet { name, bindings, descriptor_layout });
+		// TODO(Brandon): Validate bindings with descriptor set info.
+		let bindings = self.add_descriptor_set(desc);
+		let id = self.graph.create_resource(self.pass, GraphOwnedResource::GraphicsDescriptorSet { name, bindings, descriptor_layout });
 
-		GraphDescriptorHandle { id }
+		GraphGraphicsDescriptorHandle { id }
+	}
+
+	pub fn add_compute_descriptor_set<'c>(&mut self, desc: DescriptorDesc<'a, 'c>) -> GraphComputeDescriptorHandle {
+		let name = desc.name;
+		let descriptor_layout = desc.descriptor_layout;
+
+		// TODO(Brandon): Validate bindings with descriptor set info.
+		let bindings = self.add_descriptor_set(desc);
+		let id = self.graph.create_resource(self.pass, GraphOwnedResource::ComputeDescriptorSet { name, bindings, descriptor_layout });
+
+		GraphComputeDescriptorHandle { id }
 	}
 
 	pub fn cmd_begin_render_pass(&mut self, render_pass: GraphRenderPassHandle, clear_values: &[ClearValue]) {
@@ -1456,22 +1593,9 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 		recorded.cmds.push(PassCmd::BindRasterPipeline { pipeline });
 	}
 
-	pub fn cmd_bind_raster_descriptor(&mut self, descriptor: GraphDescriptorHandle, set: u32, pipeline: GraphRasterPipelineHandle) {
+	pub fn cmd_bind_graphics_descriptor(&mut self, descriptor: GraphGraphicsDescriptorHandle, set: u32, pipeline: GraphRasterPipelineHandle) {
 		let recorded = self.recorded.as_mut().unwrap();
-		recorded.cmds.push(PassCmd::BindDescriptor {
-			set,
-			descriptor,
-			pipeline: GraphPipelineHandle::Raster(pipeline),
-		});
-	}
-
-	pub fn cmd_bind_compute_descriptor(&mut self, descriptor: GraphDescriptorHandle, set: u32, pipeline: GraphComputePipelineHandle) {
-		let recorded = self.recorded.as_mut().unwrap();
-		recorded.cmds.push(PassCmd::BindDescriptor {
-			set,
-			descriptor,
-			pipeline: GraphPipelineHandle::Compute(pipeline),
-		});
+		recorded.cmds.push(PassCmd::BindGraphicsDescriptor { set, descriptor, pipeline });
 	}
 
 	pub fn cmd_draw_mesh(&mut self, mesh: &'a Mesh) {
@@ -1489,6 +1613,25 @@ impl<'a, 'b> PassBuilder<'a, 'b> {
 			instance_count,
 			first_vertex,
 			first_instance,
+		});
+	}
+
+	pub fn cmd_bind_compute_pipeline(&mut self, pipeline: GraphComputePipelineHandle) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.cmds.push(PassCmd::BindComputePipeline { pipeline });
+	}
+
+	pub fn cmd_bind_compute_descriptor(&mut self, descriptor: GraphComputeDescriptorHandle, set: u32, pipeline: GraphComputePipelineHandle) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.cmds.push(PassCmd::BindComputeDescriptor { set, descriptor, pipeline });
+	}
+
+	pub fn cmd_dispatch(&mut self, group_count_x: u32, group_count_y: u32, group_count_z: u32) {
+		let recorded = self.recorded.as_mut().unwrap();
+		recorded.cmds.push(PassCmd::Dispatch {
+			group_count_x,
+			group_count_y,
+			group_count_z,
 		});
 	}
 

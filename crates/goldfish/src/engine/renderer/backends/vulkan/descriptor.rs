@@ -68,9 +68,9 @@ impl VulkanDevice {
 						&info
 							.bindings
 							.entries()
-							.map(|(binding, &ty)| {
+							.map(|(&binding, &ty)| {
 								vk::DescriptorSetLayoutBinding::builder()
-									.binding(*binding)
+									.binding(binding)
 									.descriptor_type(ty.into())
 									.descriptor_count(1)
 									.stage_flags(stage_flags)

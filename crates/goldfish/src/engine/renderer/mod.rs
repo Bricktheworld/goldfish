@@ -44,18 +44,91 @@ impl FrameId {
 
 #[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum TextureFormat {
-	RGB8,
-	RGB16,
-	RGBA8,
-	RGBA16,
+	// Fixed point [0.0, 1.0]
+	// All 0s == 0.0
+	// All 1s == 1.0
+	R8UNorm,
+	R16UNorm,
+
+	RG8UNorm,
+	RG16UNorm,
+
+	RGB8UNorm,
+	RGB16UNorm,
+	CubemapRGB8UNorm,
+	CubemapRGB16UNorm,
+
+	RGBA8UNorm,
+	RGBA16UNorm,
+	CubemapRGBA8UNorm,
+	CubemapRGBA16UNorm,
+
+	// Fixed point SRGB [0.0, 1.0]
+	// All 0s == 0.0
+	// All 1s == 1.0
 	SRGB8,
-	SRGBA8,
-	CubemapRGB8,
-	CubemapRGB16,
-	CubemapRGBA8,
-	CubemapRGBA16,
 	CubemapSRGB8,
+
+	SRGBA8,
 	CubemapSRGBA8,
+
+	// Signed fixed point [-1.0, 1.0]
+	// 2s complement min == 0.0
+	// 2s complement max == 1.0
+	R8SNorm,
+	R16SNorm,
+
+	RG8SNorm,
+	RG16SNorm,
+
+	RGB8SNorm,
+	RGB16SNorm,
+
+	RGBA8SNorm,
+	RGBA16SNorm,
+
+	// Unsigned integers
+	R8UInt,
+	R16UInt,
+	R32UInt,
+
+	RG8UInt,
+	RG16UInt,
+	RG32UInt,
+
+	RGB8UInt,
+	RGB16UInt,
+	RGB32UInt,
+
+	RGBA8UInt,
+	RGBA16UInt,
+	RGBA32UInt,
+
+	// Signed integers
+	R8SInt,
+	R16SInt,
+	R32SInt,
+
+	RG8SInt,
+	RG16SInt,
+	RG32SInt,
+
+	RGB8SInt,
+	RGB16SInt,
+	RGB32SInt,
+
+	RGBA8SInt,
+	RGBA16SInt,
+	RGBA32SInt,
+
+	// Floating point
+	R32Float,
+	RG32Float,
+	RGB32Float,
+	RGBA32Float,
+
+	// Depth formats
+	// TODO(Brandon): Add depth stencil format here.
 	Depth,
 }
 
@@ -163,10 +236,10 @@ pub const EMPTY_VERTEX_INFO: VertexInputInfo = VertexInputInfo { bindings: &[], 
 
 impl TextureFormat {
 	pub fn is_cubemap(&self) -> bool {
-		return (*self == TextureFormat::CubemapRGB8)
-			| (*self == TextureFormat::CubemapRGB16)
-			| (*self == TextureFormat::CubemapRGBA8)
-			| (*self == TextureFormat::CubemapRGBA16)
+		return (*self == TextureFormat::CubemapRGB8UNorm)
+			| (*self == TextureFormat::CubemapRGB16UNorm)
+			| (*self == TextureFormat::CubemapRGBA8UNorm)
+			| (*self == TextureFormat::CubemapRGBA16UNorm)
 			| (*self == TextureFormat::CubemapSRGB8)
 			| (*self == TextureFormat::CubemapSRGBA8);
 	}

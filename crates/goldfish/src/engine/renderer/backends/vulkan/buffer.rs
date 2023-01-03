@@ -162,6 +162,10 @@ impl VulkanDevice {
 		return false;
 	}
 
+	pub fn get_buffer_dst<'a>(&self, buffer: &'a mut VulkanBuffer) -> &'a mut [u8] {
+		buffer.allocation.mapped_slice_mut().expect("Failed to map allocation!")
+	}
+
 	pub fn destroy_buffer(&mut self, buffer: VulkanBuffer) {
 		self.queue_destruction(&mut [VulkanDestructor::Buffer(buffer.raw), VulkanDestructor::Allocation(buffer.allocation)])
 	}

@@ -157,6 +157,10 @@ enum MemberType {
 	Vec4,
 	Mat3,
 	Mat4,
+	U32,
+	UVec2,
+	UVec3,
+	UVec4,
 }
 impl From<Type> for MemberType {
 	fn from(ty: Type) -> Self {
@@ -167,6 +171,10 @@ impl From<Type> for MemberType {
 			Type::Float { vecsize: 4, columns: 1, .. } => MemberType::Vec4,
 			Type::Float { vecsize: 3, columns: 3, .. } => MemberType::Mat3,
 			Type::Float { vecsize: 4, columns: 4, .. } => MemberType::Mat4,
+			Type::UInt { vecsize: 1, columns: 1, .. } => MemberType::U32,
+			Type::UInt { vecsize: 2, columns: 1, .. } => MemberType::UVec2,
+			Type::UInt { vecsize: 3, columns: 1, .. } => MemberType::UVec3,
+			Type::UInt { vecsize: 4, columns: 1, .. } => MemberType::UVec4,
 			_ => unimplemented!("Unimplemented type {:?}", ty),
 		}
 	}
@@ -397,11 +405,9 @@ pub struct Descriptor{0} {{
 			.collect::<String>(),
 	)
 }
-
-fn generate_cbuffer_rust(struct_info: &Struct) -> String {
-	fn generate_struct_rust(struct_info: &Struct) -> String {
-		format!(
-			"
+fn generate_struct_rust(struct_info: &Struct) -> String {
+	format!(
+		"
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct {0} {{
 {1}
@@ -411,26 +417,31 @@ unsafe impl bytemuck::Pod for {0} {{}}
 unsafe impl bytemuck::Zeroable for {0} {{}}
 
 ",
-			struct_info.ty_name,
-			struct_info
-				.members
-				.iter()
-				.map(|member| format!(
-					"pub {}: {},\n",
-					member.name,
-					match member.ty {
-						MemberType::F32 => "f32",
-						MemberType::Vec2 => "glam::Vec2",
-						MemberType::Vec3 => "glam::Vec3",
-						MemberType::Vec4 => "glam::Vec4",
-						MemberType::Mat3 => "glam::Mat3",
-						MemberType::Mat4 => "glam::Mat4",
-					}
-				))
-				.collect::<String>(),
-		)
-	}
+		struct_info.ty_name,
+		struct_info
+			.members
+			.iter()
+			.map(|member| format!(
+				"pub {}: {},\n",
+				member.name,
+				match member.ty {
+					MemberType::F32 => "f32",
+					MemberType::Vec2 => "glam::Vec2",
+					MemberType::Vec3 => "glam::Vec3",
+					MemberType::Vec4 => "glam::Vec4",
+					MemberType::Mat3 => "glam::Mat3",
+					MemberType::Mat4 => "glam::Mat4",
+					MemberType::U32 => "u32",
+					MemberType::UVec2 => "glam::UVec2",
+					MemberType::UVec3 => "glam::UVec3",
+					MemberType::UVec4 => "glam::UVec4",
+				}
+			))
+			.collect::<String>(),
+	)
+}
 
+fn generate_cbuffer_rust(struct_info: &Struct) -> String {
 	format!(
 		"
 {1}
@@ -459,8 +470,9 @@ let slice = {0};
 output[{1}..{1} + slice.len()].clone_from_slice(slice);
 ",
 				match member.ty {
-					MemberType::F32 => format!("&self.{0}.to_ne_bytes()", member.name),
-					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 => format!("bytemuck::cast_slice::<_, u8>(self.{0}.as_ref())", member.name),
+					MemberType::F32 | MemberType::U32 => format!("&self.{0}.to_ne_bytes()", member.name),
+					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 | MemberType::UVec2 | MemberType::UVec3 | MemberType::UVec4 =>
+						format!("bytemuck::cast_slice::<_, u8>(self.{0}.as_ref())", member.name),
 				},
 				member.offset,
 			))
@@ -471,13 +483,7 @@ output[{1}..{1} + slice.len()].clone_from_slice(slice);
 fn generate_structured_buffer_rust(struct_info: &Struct) -> String {
 	format!(
 		"
-#[derive(Debug, Default, Copy, Clone, PartialEq)]
-pub struct {0} {{
 {1}
-}}
-
-unsafe impl bytemuck::Pod for {0} {{}}
-unsafe impl bytemuck::Zeroable for {0} {{}}
 
 impl goldfish::build::StructuredBuffer<{2}> for {0} {{
     fn size() -> usize {{
@@ -495,22 +501,7 @@ impl goldfish::build::StructuredBuffer<{2}> for {0} {{
 }}
 ",
 		struct_info.ty_name,
-		struct_info
-			.members
-			.iter()
-			.map(|member| format!(
-				"pub {}: {},\n",
-				member.name,
-				match member.ty {
-					MemberType::F32 => "f32",
-					MemberType::Vec2 => "glam::Vec2",
-					MemberType::Vec3 => "glam::Vec3",
-					MemberType::Vec4 => "glam::Vec4",
-					MemberType::Mat3 => "glam::Mat3",
-					MemberType::Mat4 => "glam::Mat4",
-				}
-			))
-			.collect::<String>(),
+		generate_struct_rust(struct_info),
 		struct_info.size,
 		struct_info
 			.members
@@ -521,8 +512,9 @@ let slice = {0};
 dst[{1}..{1} + slice.len()].clone_from_slice(slice);
 ",
 				match member.ty {
-					MemberType::F32 => format!("&buf.{0}.to_ne_bytes()", member.name),
-					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 => format!("bytemuck::cast_slice::<_, u8>(buf.{0}.as_ref())", member.name),
+					MemberType::F32 | MemberType::U32 => format!("&buf.{0}.to_ne_bytes()", member.name),
+					MemberType::Vec2 | MemberType::Vec3 | MemberType::Vec4 | MemberType::Mat3 | MemberType::Mat4 | MemberType::UVec2 | MemberType::UVec3 | MemberType::UVec4 =>
+						format!("bytemuck::cast_slice::<_, u8>(buf.{0}.as_ref())", member.name),
 				},
 				member.offset,
 			))

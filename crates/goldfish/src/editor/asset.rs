@@ -81,7 +81,7 @@ impl Asset {
 
 		let additional_data = match asset_type {
 			AssetType::Mesh => AdditionalAssetData::Mesh,
-			AssetType::Texture => AdditionalAssetData::Texture(TextureAsset { format: TextureFormat::RGBA8 }),
+			AssetType::Texture => AdditionalAssetData::Texture(TextureAsset { format: TextureFormat::RGBA8UNorm }),
 			AssetType::Shader => AdditionalAssetData::Shader,
 			AssetType::Other => AdditionalAssetData::Other,
 		};
